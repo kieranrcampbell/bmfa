@@ -29,7 +29,7 @@ mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
   
   ## pseudotime parameters
   r <- 1
-  pst <- rep(0.5, N) # rnorm(N, 0, 1 / r^2)
+  pst <-prcomp(t(y))$x[,1] # rep(0.5, N) # rnorm(N, 0, 1 / r^2)
   
   nsamples <- floor((iter - burn) / thin)
   G_dim <- c(nsamples, G)
