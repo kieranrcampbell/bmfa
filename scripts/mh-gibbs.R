@@ -229,7 +229,7 @@ sample_delta <- function(how = c("individual", "joint"),
     }
     return(list(delta = d, acceptance = mean(acceptance)))
   } else {
-    dp <- propose_kd(delta, kappa_depta)
+    dp <- propose_kd(delta, kappa_delta)
     q <- Q(y, t, tp,
            k0, k0, k1, k1,
            phi0, phi0, phi1, phi1, 
@@ -287,6 +287,7 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
   tau_trace <- mcmcify(matrix(NA, nrow = G_dim[1], ncol = G_dim[2]), "tau")
   gamma_trace <- mcmcify(matrix(NA, nrow = N_dim[1], ncol = N_dim[2]), "gamma")
   pst_trace <- mcmcify(matrix(NA, nrow = N_dim[1], ncol = N_dim[2]), "pst")
+  lp_trace <- mcmcify(matrix(NA, nrow = iter, ncol = 1), "lp__")
   
   ## MH control - to tidy up
   accept_reject <- list(pst = rep(NA, iter), delta = rep(NA, iter), 
@@ -316,21 +317,21 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     ## MH updates for t, k & delta ---------------------------------------------
     
     ## Pseudotimes
-    pst_new_list <- sample_pst("joint", Y, pst, k0, k1, phi0, phi1, delta, 
+    pst_new_list <- sample_pst("joint", y, pst, k0, k1, phi0, phi1, delta, 
                           tau, gamma, tau_k, tau_phi, tau_delta,
                           alpha, beta, kappa_t)
     pst_new <- pst_new_list$pst
     accept_reject$t[it] <- pst_new_list$acceptance
     
     ## k0
-    k0_new_list <- sample_k("k1", "joint", Y, pst, k0, k1, phi0, phi1, delta, 
+    k0_new_list <- sample_k("k1", "joint", y, pst, k0, k1, phi0, phi1, delta, 
                                tau, gamma, tau_k, tau_phi, tau_delta,
                                alpha, beta, kappa_k, kappa_t)
     k0_new <- k0_new_list$k
     accept_reject$k0[it] <- k0_new_list$acceptance
     
     ## k1
-    k1_new_list <- sample_k("k0", "joint", Y, pst, k0, k1, phi0, phi1, delta, 
+    k1_new_list <- sample_k("k1", "joint", y, pst, k0, k1, phi0, phi1, delta, 
                             tau, gamma, tau_k, tau_phi, tau_delta,
                             alpha, beta, kappa_k, kappa_t)
     k1_new <- k1_new_list$k
@@ -343,17 +344,40 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     delta_new <- delta_new_list$delta
     accept_reject$delta[it] <- delta_new_list$acceptance
     
+    #' Gibbs updates ---------------------------------
     
-    ## updates for phi
+    #' Updates for phi ---------
+    #' In this section, mu0 is defined slightly differently from usual,
+    #' dropping the factor of phi beforehand
+    mu0 <- t(sapply(pst_new, function(t) sigmoid(t, k0_new, delta_new)))
+    mu1 <- t(sapply(pst_new, function(t) sigmoid(t, k1_new, delta_new)))
     
-    ## updates for tau
-    ## create a mu vector first for convenience
-
+    mu0 <- mu0[gamma_new == 0, ]
+    mu1 <- mu1[gamma_new == 1, ]
+    
+    lam0 <- tau_phi + tau * colSums(mu0^2)
+    nu0 <- (tau_phi * phi1 + tau * colSums(y * mu0)) / lam0
+    phi0_new <- rnorm(nu0, 1 / sqrt(lam0))
+    
+    lam1 <- tau_phi + tau * colSums(mu1^2)
+    nu1 <- (tau_phi * phi0_new + tau * colSums(y * mu1)) / lam1
+    phi1_new <- rnorm(nu1, 1 / sqrt(lam1))
+    
+    
+    #' Updates for tau ------
+    #' Here we revert back to the usual definition of mu
+    mu0 <- t(sapply(pst_new, function(t) mu_cg(k0_new, phi0_new, delta_new, t)))
+    mu1 <- t(sapply(pst_new, function(t) mu_cg(k1_new, phi1_new, delta_new, t)))
+    
+    mu <- matrix(NA, nrow = C, ncol = G)
+    mu[gamma_new == 0, ] <- mu0[gamma_new == 0, ]
+    mu[gamma_new == 1, ] <- mu0[gamma_new == 1, ]
+    
     alpha_new <- rep(alpha + N / 2, N)
     beta_new <- beta + colSums((y - mu)^2) / 2
     tau_new <- rgamma(G, alpha_new, beta_new)
     
-    ## accept new parameters
+    ## accept new parameters (this mainly here for debugging)
     gamma <- gamma_new
     k0 <- k0_new
     k1 <- k1_new
@@ -367,17 +391,19 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
       sample_pos <- (it - burn) / thin
       k0_trace[sample_pos,] <- k0
       k1_trace[sample_pos,] <- k1
-      c0_trace[sample_pos,] <- c0
-      c1_trace[sample_pos,] <- c1
+      phi0_trace[sample_pos,] <- phi0
+      phi1_trace[sample_pos,] <- phi1
+      delta_trace[sample_pos,] <- delta
       tau_trace[sample_pos,] <- tau
       gamma_trace[sample_pos,] <- gamma
       pst_trace[sample_pos,] <- pst
     }
   }
-  return(list(k0_trace = k0_trace, k1_trace = k1_trace,
-              c0_trace = c0_trace, c1_trace = c1_trace,
-              tau_trace = tau_trace, gamma_trace = gamma_trace,
-              pst_trace = pst_trace))
+  return(list(traces = list(k0_trace = k0_trace, k1_trace = k1_trace,
+                            c0_trace = c0_trace, c1_trace = c1_trace,
+                            tau_trace = tau_trace, gamma_trace = gamma_trace,
+                            pst_trace = pst_trace, lp_trace = lp_trace),
+              accept = accept_reject))
 }
 
 
