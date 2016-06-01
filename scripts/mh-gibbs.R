@@ -1,4 +1,4 @@
-## Gibbs sampling for mixture of factor analyzers
+## Metropolis-Hastings-within-Gibbs for mixture of nonlinear factor analyzers
 
 library(matrixStats)
 library(truncnorm)
@@ -155,41 +155,58 @@ sample_pst <- function(how = c("individual", "joint"),
   }
 }
 
-sample_k <- function(how = c("individual", "joint"),
+sample_k <- function(par = c("k0", "k1"), how = c("individual", "joint"),
                        y, pst, k0, k1, phi0, phi1, delta, 
                        tau, gamma, tau_k, tau_phi, tau_delta,
                        alpha, beta, kappa_k, kappa_t) {
   how <- match.arg(how)
+  par <- match.arg(par)
   if(how == "individual") {
-    k <- k0
+    k <- switch(par, k0 = k0, k1 = k1)
     acceptance <- rep(0, seq_along(k))
     for(i in seq_along(k)) {
       kp <- propose_t(k, kappa_k, which = i)
+      q <- NULL
+      if(par == "k0") {
+      q <- Q(y, t, t, k0, kp, k1, k1,
+             phi0, phi0, phi1, phi1, delta, delta, 
+             tau, gamma, tau_k, tau_phi, tau_delta, alpha, beta, kappa_t)
+      } else {
+      q <- Q(y, t, t, k0, k0, k1, kp,
+             phi0, phi0, phi1, phi1, delta, delta, 
+             tau, gamma, tau_k, tau_phi, tau_delta, alpha, beta, kappa_t)   
+      }
+      if(q > log(runif(1))) {
+        k <- kp
+        acceptance[i] <- 1
+      }
+    }
+    return(list(k = k, acceptance = mean(acceptance)))
+  } else {
+    q <- NULL
+    if(par == "k0") {
+      kp <- propose_t(k0, kappa_t)
       q <- Q(y, t, t,
              k0, kp, k1, k1,
              phi0, phi0, phi1, phi1, 
              delta, delta, 
              tau, gamma, tau_k, tau_phi, tau_delta,
              alpha, beta, kappa_t)
-      if(q > log(runif(1))) {
-        t <- tp
-        acceptance[i] <- 1
-      }
+    } else {
+      kp <- propose_t(k1, kappa_t)
+      q <- Q(y, t, t,
+             k0, k0, k1, kp,
+             phi0, phi0, phi1, phi1, 
+             delta, delta, 
+             tau, gamma, tau_k, tau_phi, tau_delta,
+             alpha, beta, kappa_t)
     }
-    return(list(pst = t, acceptance = mean(acceptance)))
-  } else {
-    tp <- propose_t(pst, kappa_t)
-    q <- Q(y, t, tp,
-           k0, k0, k1, k1,
-           phi0, phi0, phi1, phi1, 
-           delta, delta, 
-           tau, gamma, tau_k, tau_phi, tau_delta,
-           alpha, beta, kappa_t)
+
     accept <- q > log(runif(1))
     if(accept) {
-      return(list(pst = tp, acceptance = 1))
+      return(list(k = kp, acceptance = 1))
     } else {
-      return(list(pst = t, acceptance = 1))
+      return(list(k = k, acceptance = 1))
     }
   }
 }
