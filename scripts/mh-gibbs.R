@@ -7,7 +7,7 @@ rbernoulli <- function(pi) rbinom(length(pi), 1, pi)
   #sapply(pi, function(p) sample(c(0,1), 1, 
    #                                                      prob = c(1-p,p)))
 
-sigmoid <- function(k, delta, t) {
+sigmoid <- function(t, k, delta) {
   2  / (1 + exp(-k * (t - delta)))
 }
 
@@ -18,7 +18,7 @@ mcmcify <- function(m, name) {
 }
 
 mu_cg <- function(k, phi, delta, t) {
-  phi * sigmoid(k, delta, t)
+  phi * sigmoid(t, k, delta)
 }
 
 #' Sum dnorm logged with precision rather than sd
@@ -45,8 +45,39 @@ eval_likelihood <- function(y, pst, k0, k1, phi0, phi1, delta,
   lp <- lp + sdnl(delta, 0.5, tau_delta)
   lp <- lp + sum(dgamma(tau, shape = alpha, rate = beta, log = TRUE))
   lp <- lp + sdnl(pst, 0.5, 1)
-  
   return(lp + ll)
+}
+
+test_likelihood <- function() {
+  Y <- matrix(1:6, ncol = 2)
+  t <- c(0.3, 0.6, 0.9)
+  gamma <- c(0, 1, 0)
+  tau <- c(0.5, 0.5)
+  phi0 <- c(1, 1)
+  phi1 <- c(2, 2)
+  k0 <- c(1, 1)
+  k1 <- c(-1, -1)
+  delta <- c(0.5, 0.5)
+  alpha <- 2; beta <- 1
+  tau_k <- tau_phi <- tau_delta <- 1
+
+  mu1 <- phi0 * sigmoid(t[1], k0, delta)
+  mu2 <- phi1 * sigmoid(t[2], k1, delta)
+  mu3 <- phi0 * sigmoid(t[3], k0, delta)
+
+  ll <- sum(dnorm(Y[1, ], mu1, 1 / sqrt(tau), log = TRUE)) +
+    sum(dnorm(Y[2, ], mu2, 1 / sqrt(tau), log = TRUE)) +
+    sum(dnorm(Y[3, ], mu3, 1 / sqrt(tau), log = TRUE))
+  
+  lp <- sum(dnorm(c(k0, k1), 0, 1 / sqrt(tau_k), log = TRUE)) +
+    2 * sum(dnorm(phi0, phi1, 1 / sqrt(tau_phi), log = TRUE)) +
+    sum(dnorm(delta, 0.5, 1 / sqrt(tau_delta), log = TRUE)) +
+    sum(dgamma(tau, shape = alpha, rate = beta, log = TRUE)) +
+    sum(dnorm(t, 0.5, 1, log = TRUE))
+  
+  stopifnot( (ll + lp) ==   
+  eval_likelihood(Y, t, k0, k1, phi0, phi1, delta, tau, gamma, 
+                  tau_k, tau_phi, tau_delta, alpha, beta))
 }
 
 
