@@ -1,11 +1,9 @@
 ## Gibbs sampling for mixture of factor analyzers
 
 library(matrixStats)
+library(truncnorm)
 
 rbernoulli <- function(pi) rbinom(length(pi), 1, pi)
-  
-  #sapply(pi, function(p) sample(c(0,1), 1, 
-   #                                                      prob = c(1-p,p)))
 
 sigmoid <- function(t, k, delta) {
   2  / (1 + exp(-k * (t - delta)))
@@ -80,6 +78,122 @@ test_likelihood <- function() {
                   tau_k, tau_phi, tau_delta, alpha, beta))
 }
 
+#' Propose a pseudotime based on current pseudotimes (t). If
+#' which is a particular index, then the vector returned contains
+#' only that index changed
+propose_t <- function(t, kappa_t, which = seq_along(t)) {
+  tp <- t
+  tp[which] <- rtruncnorm(length(which), a = 0, b = 1, mean = t[which], sd = kappa_t)
+  return(tp)
+}
+
+#' Proposal for either kappa or delta
+propose_kd <- function(k, kappa_k, which = seq_along(k)) {
+  kp <- k
+  kp[which] <- rnorm(length(which), mean = k[which], sd = kappa_k)
+}
+
+#' The "Hastings" correction required by using truncated normal distributions
+truncation_correction <- function(tp, t, kappa_t) {
+  sum(log(dtruncnorm(t, 0, 1, tp, kappa_t))) - 
+    sum(log(dtruncnorm(tp, 0, 1, t, kappa_t)))
+}
+
+#' Transition ratio; _p denotes proposed variable
+Q <- function(y, pst, pst_p,
+              k0, k0_p, k1, k1_p,
+              phi0, phi0_p, phi1, phi1_p, 
+              delta, delta_p, 
+              tau, gamma, tau_k, tau_phi, tau_delta,
+              alpha, beta, kappa_t) {
+  q <- eval_likelihood(y, pst_p, k0_p, k1_p, phi0_p, phi1_p, delta_p, 
+  tau, gamma, tau_k, tau_phi, tau_delta,
+  alpha, beta) - 
+    eval_likelihood(y, pst, k0, k1, phi0, phi1, delta, 
+                    tau, gamma, tau_k, tau_phi, tau_delta,
+                    alpha, beta) +
+    truncation_correction(pst_p, pst, kappa_t)
+  return(q)
+}
+
+sample_pst <- function(how = c("individual", "joint"),
+                       y, pst, k0, k1, phi0, phi1, delta, 
+                       tau, gamma, tau_k, tau_phi, tau_delta,
+                       alpha, beta, kappa_t) {
+  how <- match.arg(how)
+  if(how == "individual") {
+    t <- pst
+    acceptance <- rep(0, seq_along(t))
+    for(i in seq_along(t)) {
+      tp <- propose_t(t, kappa_t, which = i)
+      q <- Q(y, t, tp,
+             k0, k0, k1, k1,
+             phi0, phi0, phi1, phi1, 
+             delta, delta, 
+             tau, gamma, tau_k, tau_phi, tau_delta,
+             alpha, beta, kappa_t)
+      if(q > log(runif(1))) {
+        t <- tp
+        acceptance[i] <- 1
+      }
+    }
+    return(list(pst = t, acceptance = mean(acceptance)))
+  } else {
+    tp <- propose_t(pst, kappa_t)
+    q <- Q(y, t, tp,
+           k0, k0, k1, k1,
+           phi0, phi0, phi1, phi1, 
+           delta, delta, 
+           tau, gamma, tau_k, tau_phi, tau_delta,
+           alpha, beta, kappa_t)
+    accept <- q > log(runif(1))
+    if(accept) {
+      return(list(pst = tp, acceptance = 1))
+    } else {
+      return(list(pst = t, acceptance = 1))
+    }
+  }
+}
+
+sample_k <- function(how = c("individual", "joint"),
+                       y, pst, k0, k1, phi0, phi1, delta, 
+                       tau, gamma, tau_k, tau_phi, tau_delta,
+                       alpha, beta, kappa_k, kappa_t) {
+  how <- match.arg(how)
+  if(how == "individual") {
+    k <- k0
+    acceptance <- rep(0, seq_along(k))
+    for(i in seq_along(k)) {
+      kp <- propose_t(k, kappa_k, which = i)
+      q <- Q(y, t, t,
+             k0, kp, k1, k1,
+             phi0, phi0, phi1, phi1, 
+             delta, delta, 
+             tau, gamma, tau_k, tau_phi, tau_delta,
+             alpha, beta, kappa_t)
+      if(q > log(runif(1))) {
+        t <- tp
+        acceptance[i] <- 1
+      }
+    }
+    return(list(pst = t, acceptance = mean(acceptance)))
+  } else {
+    tp <- propose_t(pst, kappa_t)
+    q <- Q(y, t, tp,
+           k0, k0, k1, k1,
+           phi0, phi0, phi1, phi1, 
+           delta, delta, 
+           tau, gamma, tau_k, tau_phi, tau_delta,
+           alpha, beta, kappa_t)
+    accept <- q > log(runif(1))
+    if(accept) {
+      return(list(pst = tp, acceptance = 1))
+    } else {
+      return(list(pst = t, acceptance = 1))
+    }
+  }
+}
+
 
 #' MH-within-Gibbs for nonlinear MFA
 #' @param y Cell-by-gene
@@ -149,7 +263,11 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     
 
     ## MH updates for t, k & delta ---------------------------------------------
-
+    pst_new_list <- sample_pst("joint", Y, pst, k0, k1, phi0, phi1, delta, 
+                          tau, gamma, tau_k, tau_phi, tau_delta,
+                          alpha, beta, kappa_t)
+    pst_new <- pst_new_list$pst
+    accept_reject$t[it] <- pst_new_list$acceptance
     
     
     ## updates for phi
@@ -169,8 +287,9 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     gamma <- gamma_new
     k0 <- k0_new
     k1 <- k1_new
-    c0 <- c0_new
-    c1 <- c1_new
+    phi0 <- phi0_new
+    phi1 <- phi1_new
+    delta <- delta_new
     pst <- pst_new
     tau <- tau_new
     
