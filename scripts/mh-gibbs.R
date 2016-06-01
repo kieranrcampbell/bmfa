@@ -165,7 +165,7 @@ sample_k <- function(par = c("k0", "k1"), how = c("individual", "joint"),
     k <- switch(par, k0 = k0, k1 = k1)
     acceptance <- rep(0, seq_along(k))
     for(i in seq_along(k)) {
-      kp <- propose_t(k, kappa_k, which = i)
+      kp <- propose_kd(k, kappa_k, which = i)
       q <- NULL
       if(par == "k0") {
       q <- Q(y, t, t, k0, kp, k1, k1,
@@ -185,28 +185,62 @@ sample_k <- function(par = c("k0", "k1"), how = c("individual", "joint"),
   } else {
     q <- NULL
     if(par == "k0") {
-      kp <- propose_t(k0, kappa_t)
-      q <- Q(y, t, t,
-             k0, kp, k1, k1,
-             phi0, phi0, phi1, phi1, 
-             delta, delta, 
+      kp <- propose_kd(k0, kappa_t)
+      q <- Q(y, t, t, k0, kp, k1, k1,
+             phi0, phi0, phi1, phi1, delta, delta, 
              tau, gamma, tau_k, tau_phi, tau_delta,
              alpha, beta, kappa_t)
     } else {
-      kp <- propose_t(k1, kappa_t)
-      q <- Q(y, t, t,
-             k0, k0, k1, kp,
-             phi0, phi0, phi1, phi1, 
-             delta, delta, 
+      kp <- propose_kd(k1, kappa_t)
+      q <- Q(y, t, t, k0, k0, k1, kp,
+             phi0, phi0, phi1, phi1, delta, delta, 
              tau, gamma, tau_k, tau_phi, tau_delta,
              alpha, beta, kappa_t)
     }
-
     accept <- q > log(runif(1))
     if(accept) {
       return(list(k = kp, acceptance = 1))
     } else {
       return(list(k = k, acceptance = 1))
+    }
+  }
+}
+
+sample_delta <- function(how = c("individual", "joint"),
+                       y, pst, k0, k1, phi0, phi1, delta, 
+                       tau, gamma, tau_k, tau_phi, tau_delta,
+                       alpha, beta, kappa_delta, kappa_t) {
+  how <- match.arg(how)
+  if(how == "individual") {
+    d <- delta
+    acceptance <- rep(0, seq_along(d))
+    for(i in seq_along(d)) {
+      dp <- propose_kd(d, kappa_delta, which = i)
+      q <- Q(y, t, t,
+             k0, k0, k1, k1,
+             phi0, phi0, phi1, phi1, 
+             d, dp, 
+             tau, gamma, tau_k, tau_phi, tau_delta,
+             alpha, beta, kappa_t)
+      if(q > log(runif(1))) {
+        d <- dp
+        acceptance[i] <- 1
+      }
+    }
+    return(list(delta = d, acceptance = mean(acceptance)))
+  } else {
+    dp <- propose_kd(delta, kappa_depta)
+    q <- Q(y, t, tp,
+           k0, k0, k1, k1,
+           phi0, phi0, phi1, phi1, 
+           delta, dp, 
+           tau, gamma, tau_k, tau_phi, tau_delta,
+           alpha, beta, kappa_t)
+    accept <- q > log(runif(1))
+    if(accept) {
+      return(list(delta = dp, acceptance = 1))
+    } else {
+      return(list(delta = delta, acceptance = 1))
     }
   }
 }
@@ -255,8 +289,8 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
   pst_trace <- mcmcify(matrix(NA, nrow = N_dim[1], ncol = N_dim[2]), "pst")
   
   ## MH control - to tidy up
-  accept_reject <- list(joint = rep(NA, iter), t = rep(NA, iter),
-                        delta = rep(NA, iter), k = rep(NA, iter))
+  accept_reject <- list(pst = rep(NA, iter), delta = rep(NA, iter), 
+                        k0 = rep(NA, iter), k1 = rep(NA, iter))
   
   for(it in 1:iter) {
     ## Sanity checks - remove later
@@ -280,22 +314,41 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     
 
     ## MH updates for t, k & delta ---------------------------------------------
+    
+    ## Pseudotimes
     pst_new_list <- sample_pst("joint", Y, pst, k0, k1, phi0, phi1, delta, 
                           tau, gamma, tau_k, tau_phi, tau_delta,
                           alpha, beta, kappa_t)
     pst_new <- pst_new_list$pst
     accept_reject$t[it] <- pst_new_list$acceptance
     
+    ## k0
+    k0_new_list <- sample_k("k1", "joint", Y, pst, k0, k1, phi0, phi1, delta, 
+                               tau, gamma, tau_k, tau_phi, tau_delta,
+                               alpha, beta, kappa_k, kappa_t)
+    k0_new <- k0_new_list$k
+    accept_reject$k0[it] <- k0_new_list$acceptance
+    
+    ## k1
+    k1_new_list <- sample_k("k0", "joint", Y, pst, k0, k1, phi0, phi1, delta, 
+                            tau, gamma, tau_k, tau_phi, tau_delta,
+                            alpha, beta, kappa_k, kappa_t)
+    k1_new <- k1_new_list$k
+    accept_reject$k1[it] <- k0_new_list$acceptance
+    
+    ## delta
+    delta_new_list <- sample_delta("joint", y, pst, k0, k1, phi0, phi1, delta, 
+                                   tau, gamma, tau_k, tau_phi, tau_delta,
+                                   alpha, beta, kappa_delta, kappa_t)
+    delta_new <- delta_new_list$delta
+    accept_reject$delta[it] <- delta_new_list$acceptance
+    
     
     ## updates for phi
     
     ## updates for tau
     ## create a mu vector first for convenience
-    mu <- sapply(seq_len(G), function(g) {
-      (1 - gamma_new) * (c0_new[g] + k0_new[g] * pst_new) +
-        gamma_new * (c1_new[g] + k1_new[g] * pst_new)
-    })
-    
+
     alpha_new <- rep(alpha + N / 2, N)
     beta_new <- beta + colSums((y - mu)^2) / 2
     tau_new <- rgamma(G, alpha_new, beta_new)
