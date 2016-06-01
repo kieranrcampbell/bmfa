@@ -21,6 +21,34 @@ mu_cg <- function(k, phi, delta, t) {
   phi * sigmoid(k, delta, t)
 }
 
+#' Sum dnorm logged with precision rather than sd
+sdnl <- function(x, mean = 0, tau = 1, log = TRUE) sum(dnorm(x, mean, 1 / sqrt(tau), log))
+
+#' 
+eval_likelihood <- function(y, pst, k0, k1, phi0, phi1, delta, 
+                            tau, gamma, tau_k, tau_phi, tau_delta,
+                            alpha, beta) {
+  # mean assuming all cells are on branch 0
+  mu0 <- t(sapply(pst, function(t) mu_cg(k0, phi0, delta, t)))
+  # mean assuming all cells are on branch 1
+  mu1 <- t(sapply(pst, function(t) mu_cg(k1, phi1, delta, t)))
+  # likelihood assuming all cells are on branch 0
+  ll0 <- dnorm(y, mu0, 1 / sqrt(tau), log = TRUE)
+  # likelihood assuming all cells are on branch 1
+  ll1 <- dnorm(y, mu1, 1 / sqrt(tau), log = TRUE)
+  
+  ll <- sum(ll0[gamma == 0, ]) + sum(ll1[gamma == 1, ])
+  
+  ## Now find priors for everything
+  lp <- sdnl(k0, 0, tau_k) + sdnl(k1, 0, tau_k)
+  lp <- lp + sdnl(phi0, phi1, tau_phi) + sdnl(phi1, phi0, tau_phi)
+  lp <- lp + sdnl(delta, 0.5, tau_delta)
+  lp <- lp + sum(dgamma(tau, shape = alpha, rate = beta, log = TRUE))
+  lp <- lp + sdnl(pst, 0.5, 1)
+  
+  return(lp + ll)
+}
+
 
 #' MH-within-Gibbs for nonlinear MFA
 #' @param y Cell-by-gene
@@ -45,7 +73,7 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
   tau <- rgamma(G, shape = alpha, rate = beta)
   
   ## percision hyperpriors
-  tau_k <- tau_c <- 1
+  tau_k <- tau_phi <- tau_delta <- 1
   
   ## pseudotime parameters
   r <- 1
