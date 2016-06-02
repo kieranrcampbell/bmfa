@@ -251,8 +251,11 @@ sample_delta <- function(how = c("individual", "joint"),
 
 #' MH-within-Gibbs for nonlinear MFA
 #' @param y Cell-by-gene
+#' @param fixed A named list, which can contain 'pst', 'k0', 'k1' or 'delta', where
+#' if the name appears then those values are held fixed
 mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
-                     proposals = list(kappa_t = 0.05, kappa_k = 0.5, kappa_delta = 0.1)) {
+                     proposals = list(kappa_t = 0.05, kappa_k = 0.5, kappa_delta = 0.1),
+                     fixed = list()) {
 
   G <- ncol(y)
   N <- nrow(y)
@@ -335,25 +338,37 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     accept_reject$pst[it] <- pst_new_list$acceptance
     
     ## k0
-    k0_new_list <- sample_k("k1", "individual", y, pst, k0, k1, phi0, phi1, delta, 
-                               tau, gamma, tau_k, tau_phi, tau_delta,
-                               alpha, beta, kappa_k, kappa_t)
-    k0_new <- k0_new_list$k
-    accept_reject$k0[it] <- k0_new_list$acceptance
+    if("k0" %in% names(fixed)) {
+       k0_new <- fixed$k0
+    } else {
+      k0_new_list <- sample_k("k1", "individual", y, pst, k0, k1, phi0, phi1, delta, 
+                                 tau, gamma, tau_k, tau_phi, tau_delta,
+                                 alpha, beta, kappa_k, kappa_t)
+      k0_new <- k0_new_list$k
+      accept_reject$k0[it] <- k0_new_list$acceptance
+    }
     
     ## k1
-    k1_new_list <- sample_k("k1", "individual", y, pst, k0, k1, phi0, phi1, delta, 
-                            tau, gamma, tau_k, tau_phi, tau_delta,
-                            alpha, beta, kappa_k, kappa_t)
-    k1_new <- k1_new_list$k
-    accept_reject$k1[it] <- k0_new_list$acceptance
+    if("k1" %in% names(fixed)) {
+      k1_new <- fixed$k1
+    } else {
+      k1_new_list <- sample_k("k1", "individual", y, pst, k0, k1, phi0, phi1, delta, 
+                              tau, gamma, tau_k, tau_phi, tau_delta,
+                              alpha, beta, kappa_k, kappa_t)
+      k1_new <- k1_new_list$k
+      accept_reject$k1[it] <- k0_new_list$acceptance
+    }
     
     ## delta
-    delta_new_list <- sample_delta("individual", y, pst, k0, k1, phi0, phi1, delta, 
-                                   tau, gamma, tau_k, tau_phi, tau_delta,
-                                   alpha, beta, kappa_delta, kappa_t)
-    delta_new <- delta_new_list$delta
-    accept_reject$delta[it] <- delta_new_list$acceptance
+    if("delta" %in% names(fixed)) {
+      delta_new <- fixed$delta
+    } else {
+      delta_new_list <- sample_delta("individual", y, pst, k0, k1, phi0, phi1, delta, 
+                                     tau, gamma, tau_k, tau_phi, tau_delta,
+                                     alpha, beta, kappa_delta, kappa_t)
+      delta_new <- delta_new_list$delta
+      accept_reject$delta[it] <- delta_new_list$acceptance
+    }
     
     #' Gibbs updates ---------------------------------
     
@@ -413,6 +428,9 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
                                 alpha, beta)
     }
   }
+  
+  accept_reject <- lapply(accept_reject, `[`, burn:iter)
+  
   return(list(traces = list(k0_trace = k0_trace, k1_trace = k1_trace,
                             phi0_trace = phi0_trace, phi1_trace = phi1_trace, 
                             delta_trace = delta_trace,

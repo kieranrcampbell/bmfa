@@ -33,8 +33,12 @@ ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + geom_point()
 
 source("scripts/mh-gibbs.R")
 
-proposals = list(kappa_t = 0.1, kappa_k = 1, kappa_delta = 0.1)
-g <- mh_gibbs(X, iter = 2000, proposals = proposals, burn = 1000)
+proposals = list(kappa_t = 0.3, kappa_k = 1, kappa_delta = 0.1)
+k_true <- h5read(fname, "basic_branching/k")
+delta_true <- h5read(fname, "basic_branching/delta")
+fixed <- list(k0 = k_true[,1], k1 = k_true[,2], delta = delta_true[,1])
+
+g <- mh_gibbs(X, iter = 1000, thin = 1, proposals = proposals)#, fixed = fixed)
 
 s <- to_ggmcmc(g)
 ggs_traceplot(s, "lp__")
@@ -44,6 +48,15 @@ tmap <- posterior.mode(mcmc(g$traces$pst_trace))
 plot(true_t, tmap)
 
 sapply(g$accept, mean)
+
+branch_true <- as.factor(h5read(fname, "basic_branching/branch_assignment"))
+gamma_mean <- colMeans(g$traces$gamma_trace)
+
+d <- data.frame(prcomp(y)$x[,1:2], pst = tmap, gamma = gamma_mean)
+ggplot(d, aes(x = PC1, y = PC2, color = pst)) + geom_point()
+ggplot(d, aes(x = PC1, y = PC2, color = gamma)) + geom_point()
+
+qplot(branch_true, gamma_mean, geom = 'boxplot')
 
 ggs_traceplot(filter(s, Parameter == "pst[1]"))
 ggs_traceplot(filter(s, Parameter == "pst[2]"))
