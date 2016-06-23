@@ -2,6 +2,7 @@
 
 library(matrixStats)
 library(truncnorm)
+library(ggmcmc)
 
 rbernoulli <- function(pi) rbinom(length(pi), 1, pi)
 
@@ -57,7 +58,8 @@ test_likelihood <- function() {
   k1 <- c(-1, -1)
   delta <- c(0.5, 0.5)
   alpha <- 2; beta <- 1
-  tau_k <- tau_phi <- tau_delta <- 1
+  tau_k <- tau_phi <- 1
+  tau_delta <- 1
 
   mu1 <- phi0 * sigmoid(t[1], k0, delta)
   mu2 <- phi1 * sigmoid(t[2], k1, delta)
@@ -91,6 +93,7 @@ propose_t <- function(t, kappa_t, which = seq_along(t)) {
 propose_kd <- function(k, kappa_k, which = seq_along(k)) {
   kp <- k
   kp[which] <- rnorm(length(which), mean = k[which], sd = kappa_k)
+  return(kp)
 }
 
 #' The "Hastings" correction required by using truncated normal distributions
@@ -105,14 +108,17 @@ Q <- function(y, pst, pst_p,
               phi0, phi1,
               delta, delta_p, 
               tau, gamma, tau_k, tau_phi, tau_delta,
-              alpha, beta, kappa_t) {
+              alpha, beta, kappa_t,
+              include_truncation_correction = TRUE) {
   q <- eval_likelihood(y, pst_p, k0_p, k1_p, phi0, phi1, delta_p, 
   tau, gamma, tau_k, tau_phi, tau_delta,
   alpha, beta) - 
     eval_likelihood(y, pst, k0, k1, phi0, phi1, delta, 
                     tau, gamma, tau_k, tau_phi, tau_delta,
-                    alpha, beta) +
-    truncation_correction(pst_p, pst, kappa_t)
+                    alpha, beta) 
+  if(include_truncation_correction) {
+    q <- q + truncation_correction(pst_p, pst, kappa_t)
+  }
   return(q)
 }
 
@@ -124,7 +130,7 @@ sample_pst <- function(how = c("individual", "joint"),
   if(how == "individual") {
     t <- pst
     acceptance <- rep(0, length(t))
-    for(i in seq_along(t)) {
+    for(i in sample(seq_along(t))) {
       tp <- propose_t(t, kappa_t, which = i)
       q <- Q(y, t, tp,
              k0, k0, k1, k1,
@@ -177,6 +183,7 @@ sample_k <- function(par = c("k0", "k1"), how = c("individual", "joint"),
              phi0, phi1, delta, delta, 
              tau, gamma, tau_k, tau_phi, tau_delta, alpha, beta, kappa_t)   
       }
+      #print(c(i,q, kp))
       if(q > log(runif(1))) {
         k <- kp
         acceptance[i] <- 1
@@ -216,7 +223,7 @@ sample_delta <- function(how = c("individual", "joint"),
   how <- match.arg(how)
   if(how == "individual") {
     d <- delta
-    acceptance <- rep(0, seq_along(d))
+    acceptance <- rep(0, length(d))
     for(i in seq_along(d)) {
       dp <- propose_kd(d, kappa_delta, which = i)
       q <- Q(y, pst, pst,
@@ -247,6 +254,15 @@ sample_delta <- function(how = c("individual", "joint"),
     }
   }
 }
+
+mcmc_status_message <- function(it, iter) {
+  ## Want to status every 10% of iterations
+  it10 <- round(0.1 * iter)
+  if(it %% it10 == 0) {
+    message(paste0("Iteration ", it, " of ", iter, " (", round(it / iter * 100), "%)"))
+  }
+}
+
 
 
 #' MH-within-Gibbs for nonlinear MFA
@@ -281,7 +297,8 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
   tau <- rgamma(G, shape = alpha, rate = beta)
   
   ## percision hyperpriors
-  tau_k <- tau_phi <- tau_delta <- 1
+  tau_k <- tau_phi <- 1
+  tau_delta <- 10
   
   ## pseudotime parameters
   r <- 1
@@ -306,8 +323,8 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
                         k0 = rep(NA, iter), k1 = rep(NA, iter))
   
   for(it in 1:iter) {
-    if(it %% 100 == 0) message(paste("Iteration", it, "of", iter))
-    
+    mcmc_status_message(it, iter)
+        
     ## Sanity checks - remove later
     stopifnot(!(any(pst < 0) | any(pst > 1)))
     
@@ -331,17 +348,21 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     ## MH updates for t, k & delta ---------------------------------------------
     
     ## Pseudotimes
-    pst_new_list <- sample_pst("individual", y, pst, k0, k1, phi0, phi1, delta, 
-                          tau, gamma, tau_k, tau_phi, tau_delta,
-                          alpha, beta, kappa_t)
-    pst_new <- pst_new_list$pst
-    accept_reject$pst[it] <- pst_new_list$acceptance
+    if("pst" %in% names(fixed)) {
+      pst_new <- fixed$pst
+    } else {
+      pst_new_list <- sample_pst("individual", y, pst, k0, k1, phi0, phi1, delta, 
+                            tau, gamma, tau_k, tau_phi, tau_delta,
+                            alpha, beta, kappa_t)
+      pst_new <- pst_new_list$pst
+      accept_reject$pst[it] <- pst_new_list$acceptance
+    }
     
     ## k0
     if("k0" %in% names(fixed)) {
        k0_new <- fixed$k0
     } else {
-      k0_new_list <- sample_k("k1", "individual", y, pst, k0, k1, phi0, phi1, delta, 
+      k0_new_list <- sample_k("k0", "joint", y, pst, k0, k1, phi0, phi1, delta, 
                                  tau, gamma, tau_k, tau_phi, tau_delta,
                                  alpha, beta, kappa_k, kappa_t)
       k0_new <- k0_new_list$k
@@ -352,18 +373,18 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     if("k1" %in% names(fixed)) {
       k1_new <- fixed$k1
     } else {
-      k1_new_list <- sample_k("k1", "individual", y, pst, k0, k1, phi0, phi1, delta, 
+      k1_new_list <- sample_k("k1", "joint", y, pst, k0, k1, phi0, phi1, delta, 
                               tau, gamma, tau_k, tau_phi, tau_delta,
                               alpha, beta, kappa_k, kappa_t)
       k1_new <- k1_new_list$k
-      accept_reject$k1[it] <- k0_new_list$acceptance
+      accept_reject$k1[it] <- k1_new_list$acceptance
     }
     
     ## delta
     if("delta" %in% names(fixed)) {
       delta_new <- fixed$delta
     } else {
-      delta_new_list <- sample_delta("individual", y, pst, k0, k1, phi0, phi1, delta, 
+      delta_new_list <- sample_delta("joint", y, pst, k0, k1, phi0, phi1, delta, 
                                      tau, gamma, tau_k, tau_phi, tau_delta,
                                      alpha, beta, kappa_delta, kappa_t)
       delta_new <- delta_new_list$delta
