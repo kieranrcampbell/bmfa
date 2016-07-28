@@ -25,11 +25,16 @@ gamma_mean <- colMeans(g$gamma_trace)
 
 dp2 <- data.frame(prcomp(X)$x[,1:2], branch = gamma_mean, pseudotime = tmap)
 
-ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point()
-ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + geom_point()
+ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point() +
+  scale_color_viridis(name = "MAP\npseudotime")
+ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + geom_point() +
+  scale_color_viridis(name = "MAP\ngamma")
 
 
-plot(true_t, tmap)
+data_frame(true_t, tmap) %>% 
+  ggplot(aes(x = true_t, y = tmap)) +
+  geom_point(shape = 21, fill = "grey", color = "black", size = 2) +
+  ylab("MAP pseudotime") + xlab("True pseudotime") + geom_rug(alpha = 0.5)
 
 
 # MH - gibbs --------------------------------------------------------------
@@ -40,17 +45,18 @@ k_true <- h5read(fname, "basic_branching/k")
 phi_true <- h5read(fname, "basic_branching/phi")
 delta_true <- h5read(fname, "basic_branching/delta")
 tau_true <- 1 / h5read(fname, "basic_branching/stdev")^2
-fixed <- list(k0 = k_true[,1], k1 = k_true[,2], delta = delta_true[,1])
+# fixed <- list(k0 = k_true[,1], k1 = k_true[,2], delta = delta_true[,1])
 
-fixed <- list(pst = true_t)
+# fixed <- list(pst = true_t, delta0 = delta_true[,1], delta1 = delta_true[,2])
+fixed <- list(delta0 = delta_true[,1], delta1 = delta_true[,2])
 proposals = list(kappa_t = 0.5, kappa_k = 10, kappa_delta = 0.1)
-g <- mh_gibbs(X, iter = 20000, thin = 1, proposals = proposals, fixed = fixed)
+g <- mh_gibbs(X, iter = 20000, thin = 10, proposals = proposals, 
+              fixed = fixed, ptype = "joint")
 
 s <- to_ggmcmc(g)
 ggs_traceplot(s, "lp__") + stat_smooth()
 ggs_running(s, "lp__")
 ggs_autocorrelation(s, "lp__")
-
 
 sapply(g$accept, mean)
 
@@ -73,14 +79,20 @@ qplot(branch_true, gamma_mean, geom = 'boxplot')
 ggs_traceplot(filter(s, Parameter == "pst[1]"))
 ggs_traceplot(filter(s, Parameter == "pst[2]"))
 
-ggs_traceplot(filter(s, Parameter == "k0[2]"))
-ggs_traceplot(filter(s, Parameter == "delta[1]"))
-ggs_traceplot(filter(s, Parameter == "delta[2]"))
+ggs_traceplot(filter(s, Parameter == "k0[1]"))
+ggs_histogram(filter(s, Parameter == "k0[1]"))
+ggs_traceplot(filter(s, Parameter == "delta0[1]"))
+ggs_traceplot(filter(s, Parameter == "delta1[2]"))
 
 k0_mean <- colMeans(g$traces$k0_trace)
 k1_mean <- colMeans(g$traces$k1_trace)
+k0_map <- posterior.mode(mcmc(g$traces$k0_trace))
+k1_map <- posterior.mode(mcmc(g$traces$k1_trace))
 qplot(k_true[,1], k0_mean)
 qplot(k_true[,2], k1_mean)
+
+qplot(k_true[,1], k0_map)
+qplot(k_true[,2], k1_map)
 
 # Play around with Q ------------------------------------------------------
 
