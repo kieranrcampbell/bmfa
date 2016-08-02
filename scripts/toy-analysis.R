@@ -126,3 +126,8 @@ qv <- sapply(tvals, vary_q_t1, w)
 ldf <- data_frame(tvals, qv)
 
 ggplot(ldf, aes(x = tvals, y = qv)) + geom_line() + geom_vline(xintercept = true_t[w])
+
+s <- "a
+b
+c
+d"

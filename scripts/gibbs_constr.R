@@ -25,10 +25,8 @@ posterior <- function(y, c0, c1, k0, k1, pst, tau, gamma, tau_k, tau_c, r, alpha
         
   ll <- sum(zero_ll[gamma == 0]) + sum(one_ll[gamma == 1])
 
-  prior <- sum(dnorm(k0, 0, 1 / sqrt(tau_k), log = TRUE)) +
-    sum(dnorm(k1, 0, 1 / sqrt(tau_k), log = TRUE)) +
-    sum(dnorm(c0, 0, 1 / sqrt(tau_c), log = TRUE)) +
-    sum(dnorm(c1, 0, 1 / sqrt(tau_c), log = TRUE)) +
+  prior <- sum(dnorm(k0, k1, 1 / sqrt(tau_k), log = TRUE)) +
+    sum(dnorm(c0, c1, 1 / sqrt(tau_c), log = TRUE)) +
     sum(dgamma(tau, alpha, beta, log = TRUE)) +
     sum(dnorm(pst, 0, 1 / r, log = TRUE))
   
@@ -36,14 +34,20 @@ posterior <- function(y, c0, c1, k0, k1, pst, tau, gamma, tau_k, tau_c, r, alpha
   return( ll + prior )
 }
 
-mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
+mfa_gibbs_constr <- function(y, iter = 2000, thin = 1, burn = iter / 2, 
+                             tau_k = 1, tau_c = 1) {
   # iter <- 2000
   
   N <- ncol(y)
   G <- nrow(y)
   message(paste("Sampling for", N, "cells and", G, "genes"))
 
+  ## branching hierarchy
+  eta_tilde <- theta_tilde <- 0
+  tau_eta <- tau_theta <- 1
 
+  eta <- rnorm(2, eta_tilde, 1 / sqrt(tau_eta))  
+  theta <- rnorm(2, theta_tilde, 1 / sqrt(tau_theta))
   
   ## c & k parameters
   c0 <- c1 <- k0 <- k1 <- rep(0, G)
@@ -53,9 +57,6 @@ mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
   beta <- 1
   tau <- rgamma(G, shape = alpha, rate = beta)
   
-  
-  ## percision hyperpriors
-  tau_k <- tau_c <- 1
   
   ## pseudotime parameters
   r <- 1
@@ -69,6 +70,8 @@ mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
   G_dim <- c(nsamples, G)
   N_dim <- c(nsamples, N)
   
+  eta_trace <- mcmcify(matrix(NA, nrow = nsamples, ncol = 2), "eta")
+  theta_trace <- mcmcify(matrix(NA, nrow = nsamples, ncol = 2), "theta")
   k0_trace <- mcmcify(matrix(NA, nrow = G_dim[1], ncol = G_dim[2]), "k0")
   k1_trace <- mcmcify(matrix(NA, nrow = G_dim[1], ncol = G_dim[2]), "k1")
   c0_trace <- mcmcify(matrix(NA, nrow = G_dim[1], ncol = G_dim[2]), "c0")
@@ -104,7 +107,7 @@ mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
     })
     
     nuk0 <- sapply(seq_len(G), function(g) {
-      tau[g] * sum(pst[which_0] * (y[which_0, g] - c0[g]))
+      tau_k * theta[1] + tau[g] * sum(pst[which_0] * (y[which_0, g] - c0[g]))
     })
     nuk0 <- nuk0 / lamk_0
     
@@ -116,7 +119,7 @@ mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
     })
     
     nuk1 <- sapply(seq_len(G), function(g) {
-      tau[g] * sum(pst[which_1] * (y[which_1, g] - c1[g]))
+      tau_k * theta[2] + tau[g] * sum(pst[which_1] * (y[which_1, g] - c1[g]))
     })
     nuk1 <- nuk1 / lamk_1
     k1_new <- rnorm(G, nuk1, 1 / sqrt(lamk_1))
@@ -127,7 +130,7 @@ mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
     })
     
     nuc_0 <- sapply(seq_len(G), function(g) {
-      tau[g] * sum(y[which_0,g] - k0_new[g] * pst[which_0])
+      tau_c * eta[1] + tau[g] * sum(y[which_0,g] - k0_new[g] * pst[which_0])
     })
     nuc_0 <- nuc_0 / lamc_0
     c0_new <- rnorm(G, nuc_0, 1 / sqrt(lamc_0))
@@ -138,7 +141,7 @@ mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
     })
     
     nuc_1 <- sapply(seq_len(G), function(g) {
-      tau[g] * sum(y[which_1,g] - k1_new[g] * pst[which_1])
+      tau_c * eta[2] + tau[g] * sum(y[which_1,g] - k1_new[g] * pst[which_1])
     })
     nuc_1 <- nuc_1 / lamc_1
     c1_new <- rnorm(G, nuc_1, 1 / sqrt(lamc_1))
@@ -172,6 +175,21 @@ mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
     beta_new <- beta + colSums((y - mu)^2) / 2
     tau_new <- rgamma(G, alpha_new, beta_new)
     
+    ## updates for theta (k)
+    lambda_theta <- tau_theta + G * tau_k
+    nu_theta <- tau_theta * theta_tilde + tau_k * c(sum(k0), sum(k1))
+    nu_theta <- nu_theta / lambda_theta
+    
+    theta_new <- rnorm(2, nu_theta, 1 / sqrt(lambda_theta))
+    
+    ## updates for eta (c)
+    lambda_eta <- tau_eta + G * tau_c
+    nu_eta <- tau_eta * eta_tilde + tau_c * c(sum(c0), sum(c1))
+    nu_eta <- nu_eta / lambda_eta
+    
+    eta_new <- rnorm(2, nu_eta, 1 / sqrt(lambda_eta))
+    
+    
     ## accept new parameters
     gamma <- gamma_new
     k0 <- k0_new
@@ -180,6 +198,8 @@ mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
     c1 <- c1_new
     pst <- pst_new
     tau <- tau_new
+    eta <- eta_new
+    theta <- theta_new
     
     if((it > burn) && (it %% thin == 0)) {
       sample_pos <- (it - burn) / thin
@@ -190,7 +210,9 @@ mfa_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2) {
       tau_trace[sample_pos,] <- tau
       gamma_trace[sample_pos,] <- gamma
       pst_trace[sample_pos,] <- pst
-
+      theta_trace[sample_pos,] <- theta
+      eta_trace[sample_pos,] <- eta
+      
       post <- posterior(y, c0, c1, k0, k1, pst,
                 tau, gamma, tau_k, tau_c, r,
                 alpha, beta)
