@@ -11,7 +11,8 @@ mcmcify <- function(m, name) {
   return(m)
 }
 
-posterior <- function(y, c0, c1, k0, k1, pst, tau, gamma, tau_k, tau_c, r, alpha, beta) {
+posterior <- function(y, c0, c1, k0, k1, pst, tau, gamma, tau_k, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta) {
   G <- ncol(y)
   N <- nrow(y)
   
@@ -25,8 +26,12 @@ posterior <- function(y, c0, c1, k0, k1, pst, tau, gamma, tau_k, tau_c, r, alpha
         
   ll <- sum(zero_ll[gamma == 0]) + sum(one_ll[gamma == 1])
 
-  prior <- sum(dnorm(k0, k1, 1 / sqrt(tau_k), log = TRUE)) +
-    sum(dnorm(c0, c1, 1 / sqrt(tau_c), log = TRUE)) +
+  prior <- sum(dnorm(k0, theta[1], 1 / sqrt(tau_k), log = TRUE)) +
+    sum(dnorm(k1, theta[2], 1 / sqrt(tau_k), log = TRUE)) +
+    sum(dnorm(c0, eta[1], 1 / sqrt(tau_c), log = TRUE)) +
+    sum(dnorm(c1, eta[2], 1 / sqrt(tau_c), log = TRUE)) +
+    sum(dnorm(theta, theta_tilde, 1 / sqrt(tau_theta), log = TRUE)) +
+    sum(dnorm(eta, eta_tilde, 1 / sqrt(tau_eta), log = TRUE)) +
     sum(dgamma(tau, alpha, beta, log = TRUE)) +
     sum(dnorm(pst, 0, 1 / r, log = TRUE))
   
@@ -35,7 +40,7 @@ posterior <- function(y, c0, c1, k0, k1, pst, tau, gamma, tau_k, tau_c, r, alpha
 }
 
 mfa_gibbs_constr <- function(y, iter = 2000, thin = 1, burn = iter / 2, 
-                             tau_k = 1, tau_c = 1) {
+                             tau_k = 1, tau_c = 1, pc_initialise = 1) {
   # iter <- 2000
   
   N <- ncol(y)
@@ -60,7 +65,7 @@ mfa_gibbs_constr <- function(y, iter = 2000, thin = 1, burn = iter / 2,
   
   ## pseudotime parameters
   r <- 1
-  pst <-  prcomp(t(y))$x[,2] # rep(0.5, N) # rnorm(N, 0, 1 / r^2)
+  pst <-  prcomp(t(y))$x[,pc_initialise] # rep(0.5, N) # rnorm(N, 0, 1 / r^2)
   pst <- pst / sd(pst) # make it a little more consistent with prior assumptions
   
   ## assignments for each cell
@@ -215,14 +220,16 @@ mfa_gibbs_constr <- function(y, iter = 2000, thin = 1, burn = iter / 2,
       
       post <- posterior(y, c0, c1, k0, k1, pst,
                 tau, gamma, tau_k, tau_c, r,
-                alpha, beta)
+                alpha, beta, theta_tilde, 
+                eta_tilde, tau_theta, tau_eta)
       lp_trace[sample_pos,] <- post 
     }
   }
   return(list(k0_trace = k0_trace, k1_trace = k1_trace,
               c0_trace = c0_trace, c1_trace = c1_trace,
               tau_trace = tau_trace, gamma_trace = gamma_trace,
-              pst_trace = pst_trace, lp_trace = lp_trace))
+              pst_trace = pst_trace, theta_trace = theta_trace,
+              eta_trace = eta_trace, lp_trace = lp_trace))
 }
 
 

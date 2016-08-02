@@ -12,6 +12,54 @@ library(matrixStats)
 library(tidyr)
 
 
+# Synthetic ---------------------------------------------------------------
+
+fname <- "data/synthetic.h5"
+X <- h5read(fname, "basic_branching/X")
+branch <- h5read(fname, "basic_branching/branch_assignment")
+true_t <- h5read(fname, "basic_branching/pseudotime")
+
+dp <- data.frame(prcomp(X)$x[,1:2], branch = as.factor(branch), pseudotime = true_t)
+
+ggplot(dp, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point() + scale_color_viridis()
+ggplot(dp, aes(x = PC1, y = PC2, colour = branch)) + geom_point()
+
+source("scripts/gibbs_constr.R")
+
+g <- mfa_gibbs_constr(t(X))
+
+mc <- to_ggmcmc(g)
+
+ggs_traceplot(filter(mc, Parameter == "lp__")) + stat_smooth()
+
+ggs_traceplot(filter(mc, Parameter == "theta[1]")) + stat_smooth()
+ggs_traceplot(filter(mc, Parameter == "theta[2]")) + stat_smooth()
+
+
+tmap <- posterior.mode(mcmc(g$pst_trace))
+gamma_mean <- colMeans(g$gamma_trace)
+
+dp2 <- data.frame(prcomp(X)$x[,1:2], branch = gamma_mean, pseudotime = tmap)
+
+ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point() +
+  scale_color_viridis(name = "MAP\npseudotime")
+ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + geom_point() +
+  scale_color_viridis(name = "MAP\ngamma")
+
+
+data_frame(true_t, tmap) %>% 
+  ggplot(aes(x = true_t, y = tmap)) +
+  geom_point(shape = 21, fill = "grey", color = "black", size = 2) +
+  ylab("MAP pseudotime") + xlab("True pseudotime") + geom_rug(alpha = 0.5)
+
+
+
+
+# Wishbone ----------------------------------------------------------------
+
+
+
+
 raw <- read_csv("data/wishbone_mouse_marrow_scrnaseq.csv")
 
 set.seed(1L)
