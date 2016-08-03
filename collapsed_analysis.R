@@ -10,6 +10,7 @@ library(readr)
 library(scater)
 library(matrixStats)
 library(tidyr)
+library(magrittr)
 
 
 # Synthetic ---------------------------------------------------------------
@@ -26,14 +27,17 @@ ggplot(dp, aes(x = PC1, y = PC2, colour = branch)) + geom_point()
 
 source("scripts/gibbs_constr.R")
 
-g <- mfa_gibbs_constr(t(X))
+g <- mfa_gibbs_constr(t(X), iter = 20000, thin = 10,
+                      tau_k = 1, tau_c = 1, collapse = TRUE)
 
 mc <- to_ggmcmc(g)
 
 ggs_traceplot(filter(mc, Parameter == "lp__")) + stat_smooth()
 
-ggs_traceplot(filter(mc, Parameter == "theta[1]")) + stat_smooth()
-ggs_traceplot(filter(mc, Parameter == "theta[2]")) + stat_smooth()
+ggs_autocorrelation(filter(mc, Parameter == "lp__"))
+
+ggs_traceplot(filter(mc, Parameter == "eta[1]")) + stat_smooth()
+ggs_traceplot(filter(mc, Parameter == "eta[2]")) + stat_smooth()
 
 
 tmap <- posterior.mode(mcmc(g$pst_trace))
@@ -45,6 +49,9 @@ ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point() +
   scale_color_viridis(name = "MAP\npseudotime")
 ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + geom_point() +
   scale_color_viridis(name = "MAP\ngamma")
+
+ggplot(data_frame(branch = as.factor(branch), gamma_mean), 
+       aes(x = branch, y = gamma_mean)) + geom_boxplot()
 
 
 data_frame(true_t, tmap) %>% 
@@ -100,19 +107,56 @@ plotPCA(sce, colour_by = "GATA1")
 # X <- prcomp(t(exprs(sce)))$x[,1:20] # redDim(sce)
 X <- redDim(sce)
 
+## Visualise what these actually look like across pseudotime
+d <- as_data_frame(X) %>% 
+  mutate(pseudotime = wishbone_data$Trajectory,
+         branch = as.factor(wishbone_data$Branch)) %>% 
+  gather(feature, expression, -pseudotime, -branch) %>% 
+  mutate(feature = factor(feature, levels = paste0("PC", 1:ncol(X))))
+
+df_branch2 <- df_branch3 <- filter(d, branch == 1)
+df_branch2 %<>% mutate(branch = replace(branch, branch == 1, 2))
+df_branch3 %<>% mutate(branch = replace(branch, branch == 1, 3))
+
+d %<>% filter(branch != 1)
+d <- bind_rows(d, df_branch2, df_branch3)
+
+ggplot(d, aes(x = pseudotime, y = expression, color = branch)) +
+  #geom_point(alpha = 0.3) + 
+  stat_smooth(se = TRUE, method = "lm") + facet_wrap(~ feature, scales = "free_y") +
+  scale_color_brewer(palette = "Set1")
+
+ggplot(d, aes(x = pseudotime, y = expression, color = branch)) +
+  geom_point(alpha = 0.1) + 
+  stat_smooth(se = FALSE, method = "lm") + facet_wrap(~ feature, scales = "free_y") +
+  scale_color_brewer(palette = "Set1")
+
 
 sc <- sce[rowMeans(exprs(sce) > 0) > 0.2, ] # expressed in at least 20% of cells
 Cv2 <- matrixStats::rowVars(exprs(sc)) / rowMeans(exprs(sc))^2
 
 genes <- order(Cv2, decreasing = TRUE)
 
+X <- t(exprs(sc)[genes[1:40], ])
+
 # X <- exprs(sm)
 source("scripts/gibbs_constr.R")
-g <- mfa_gibbs_constr(t(X[,1:10]), iter = 30000, thin = 15, tau_k = 5, tau_c = 5)
+
+whiten <- function(x) (x - mean(x)) / sd(x)
+X <- apply(X, 2, whiten)
+
+g <- mfa_gibbs_constr(t(X[,1:2]), iter = 40000, 
+                      thin = 5, tau_k = 1, tau_c = 1,
+                      pc_initialise = 2, collapse = FALSE)
 
 mc <- to_ggmcmc(g)
 
 ggs_traceplot(filter(mc, Parameter == "lp__")) + stat_smooth()
+ggs_autocorrelation(filter(mc, Parameter == "lp__"))
+
+
+ggs_density(mc, family = "theta")
+ggs_density(mc, family = "eta")
 
 # ggs_traceplot(mc, "k0")
 # ggs_histogram(mc, "k0")
@@ -125,6 +169,11 @@ tsne <- wishbone_data[,1:2]
 
 dp2 <- data.frame(redDim(sce)[,1:2], tsne, branch = gamma_mean, pseudotime = tmap,
                   wishbone_branch = sce$Branch, wishbone_pseudotime = sce$Trajectory) %>% tbl_df()
+
+plot_grid(ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = pseudotime)) + geom_point() +
+            scale_color_viridis(name = "pseudotime"),
+          ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = branch)) + geom_point() +
+            scale_color_viridis(name = "branching"))
 
 t1 <- plot_grid(ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = pseudotime)) + geom_point() +
             scale_color_viridis(name = "mfa"),
@@ -158,7 +207,11 @@ ggsave("~/Desktop/mfa_branching.png",width=8,height=4)
 
 
 ggplot(dp2, aes(x = wishbone_pseudotime, y = pseudotime)) + geom_point()
+
 ggplot(dp2, aes(x = as.factor(wishbone_branch), y = branch)) + geom_boxplot()
+
+data_frame(gamma_mean, tmap) %>% 
+  ggplot(aes(x = tmap, y = gamma_mean)) + geom_point()
 
 df <- data_frame(tmap, cd34, gata1, gata2, mpo, branch = as.factor(round(gamma_mean)))
 df <- gather(df, Gene, Expression, -tmap, -branch)
@@ -166,6 +219,6 @@ df <- gather(df, Gene, Expression, -tmap, -branch)
 ggplot(df, aes(x = tmap, y = Expression, color = branch)) + geom_point(alpha = 0.2) +
   facet_wrap(~ Gene, scales = "free_y") +
   scale_color_brewer(palette = "Set1") + 
-  stat_smooth(se = FALSE, method = "loess") 
+  stat_smooth(se = FALSE, method = "lm") 
 
 

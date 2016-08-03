@@ -39,9 +39,8 @@ posterior <- function(y, c0, c1, k0, k1, pst, tau, gamma, theta, eta, tau_k, tau
   return( ll + prior )
 }
 
-mfa_gibbs_constr <- function(y, iter = 2000, thin = 1, burn = iter / 2, 
-                             tau_k = 1, tau_c = 1, pc_initialise = 1,
-                             collapse = TRUE) {
+mfa_gibbs_ard <- function(y, iter = 2000, thin = 1, burn = iter / 2, 
+                             pc_initialise = 1) {
   # iter <- 2000
   
   N <- ncol(y)

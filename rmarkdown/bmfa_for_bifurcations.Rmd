@@ -1,0 +1,246 @@
+---
+title: "Bayesian hierarchical mixture of factor analyzers for modelling bifurcations in high-dimensional genomics data"
+author: "Kieran Campbell"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+library(cowplot)
+library(ggplot2)
+library(rhdf5)
+library(coda)
+library(MCMCglmm)
+library(viridis)
+library(ggmcmc)
+library(dplyr)
+library(readr)
+library(scater)
+library(matrixStats)
+library(tidyr)
+library(magrittr)
+
+source("../scripts/gibbs_constr.R")
+
+
+select <- dplyr::select
+filter <- dplyr::filter
+rename <- dplyr::rename
+arrange <- dplyr::arrange
+mutate <- dplyr::mutate
+
+theme_set(theme_cowplot())
+
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, 
+                      message = FALSE, warning = FALSE,
+                      fig.center = TRUE, fig.width = 7, fig.height = 4)
+```
+
+# Model 1
+
+## Synthetic data
+
+### Data exploration
+
+First load the data:
+
+```{r load-synthetic}
+fname <- "../data/synthetic.h5"
+X_synth <- h5read(fname, "basic_branching/X")
+branch_synth <- h5read(fname, "basic_branching/branch_assignment")
+pst_synth <- h5read(fname, "basic_branching/pseudotime")
+
+dp <- data.frame(prcomp(X_synth)$x[,1:2], branch = as.factor(branch_synth), pseudotime = pst_synth)
+```
+
+We can plot PCA representation too:
+
+```{r plot-pca, fig.width = 9}
+plot_grid(ggplot(dp, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point() + scale_color_viridis(),
+          ggplot(dp, aes(x = PC1, y = PC2, colour = branch)) + geom_point() + scale_color_brewer(palette = "Set1"),
+          nrow = 1)
+```
+
+Let's have a look at the gene behaviour along pseudotime too:
+
+```{r gene-b-along-pst, fig.width = 10, fig.height = 10}
+d <- as_data_frame(X_synth) %>% 
+  mutate(pseudotime = pst_synth,
+         branch = as.factor(branch_synth)) %>% 
+  gather(feature, expression, -pseudotime, -branch)
+
+ggplot(d, aes(x = pseudotime, y = expression, color = branch)) +
+  geom_point(alpha = 0.1) + 
+  stat_smooth(se = FALSE, method = "lm") + facet_wrap(~ feature, scales = "free_y") +
+  scale_color_brewer(palette = "Set1") + scale_x_continuous(breaks = c(0, 0.5, 1))
+```
+
+This data is designed to be sigmoidally regulated, but we see that linear fits well.
+
+### Inference
+
+We start by performing inference using the non-collapsed Gibbs sampler:
+
+```{r gibbs-no-collapse}
+g <- mfa_gibbs_constr(t(X_synth), iter = 40000, thin = 20, collapse = FALSE)
+mc <- to_ggmcmc(g)
+```
+
+Some diagnostic plots:
+
+```{r diagnostics-synth}
+ggs_traceplot(filter(mc, Parameter == "lp__")) + stat_smooth()
+ggs_autocorrelation(filter(mc, Parameter == "lp__"))
+```
+
+We can extract the posterior estimates:
+
+```{r extract-posteriors}
+tmap <- posterior.mode(mcmc(g$pst_trace))
+gamma_mean <- colMeans(g$gamma_trace)
+```
+
+Plot in PCA space:
+
+```{r plot-inferred-pca}
+dp2 <- data.frame(prcomp(X_synth)$x[,1:2], branch = gamma_mean, pseudotime = tmap)
+plot_grid(ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point() + scale_color_viridis(),
+          ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + geom_point() + scale_color_viridis(),
+          nrow = 1)
+```
+
+and compare to true estimate:
+
+```{r compare-true}
+data_frame(pst_synth, tmap) %>% 
+  ggplot(aes(x = pst_synth, y = tmap)) +
+  geom_point(shape = 21, fill = "grey", color = "black", size = 2) +
+  ylab("MAP pseudotime") + xlab("True pseudotime") + geom_rug(alpha = 0.5)
+```
+
+
+
+### Collapsed sampling for $c$
+
+
+So far so good. But it would be nice if we were less sure about which branch the "early" samples were on. To do this we can perform collapsed Gibbs sampling by marginalising over the intercepts ($c$ parameters).
+
+```{r gibbs-collapse}
+g <- mfa_gibbs_constr(t(X_synth), iter = 40000, thin = 20, collapse = TRUE)
+mc <- to_ggmcmc(g)
+```
+
+Some diagnostic plots:
+
+```{r diagnostics-synth-collapsed}
+ggs_traceplot(filter(mc, Parameter == "lp__")) + stat_smooth()
+ggs_autocorrelation(filter(mc, Parameter == "lp__"))
+```
+
+We can extract the posterior estimates:
+
+```{r extract-posteriors-collapsed}
+tmap <- posterior.mode(mcmc(g$pst_trace))
+gamma_mean <- colMeans(g$gamma_trace)
+```
+
+Plot in PCA space:
+
+```{r plot-inferred-pca-collapsed}
+dp2 <- data.frame(prcomp(X_synth)$x[,1:2], branch = gamma_mean, pseudotime = tmap)
+plot_grid(ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point() + scale_color_viridis(),
+          ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + geom_point() + scale_color_viridis(),
+          nrow = 1)
+```
+
+and compare to true estimate:
+
+```{r compare-true-collapsed}
+data_frame(pst_synth, tmap) %>% 
+  ggplot(aes(x = pst_synth, y = tmap)) +
+  geom_point(shape = 21, fill = "grey", color = "black", size = 2) +
+  ylab("MAP pseudotime") + xlab("True pseudotime") + geom_rug(alpha = 0.5)
+```
+
+This nicely removes the "kink" in the true vs inferred pseudotimes.
+
+## Single-cell RNA-seq of haemopoeitic precursors 
+
+### Data exploration
+
+Load single-cell data:
+
+```{r load-sce}
+raw <- read_csv("../data/wishbone_mouse_marrow_scrnaseq.csv")
+
+set.seed(1L)
+cells_to_sample <- sample(seq_len(nrow(raw)), 500)
+
+tpm <- as.matrix(raw[cells_to_sample,-1])
+
+nc <- ncol(tpm)
+wishbone_data <- data.frame(tpm[, (nc - 3):nc])
+tpm <- tpm[, 1:(nc - 4)]
+
+cellnames <- raw[[1]][cells_to_sample]
+pd <- data.frame(sample = cellnames, Trajectory = wishbone_data$Trajectory, Branch = wishbone_data$Branch)
+rownames(pd) <- cellnames
+tpm <- t(tpm)
+colnames(tpm) <- cellnames
+
+sce <- newSCESet(exprsData = tpm, phenoData = new("AnnotatedDataFrame", pd))
+sce <- calculateQCMetrics(sce)
+```
+
+This comes with a pre-computed tSNE representation of the data along with the Wishbone assigned pseudotimes and branching structure. Let's plot:
+
+```{r plot-wishbone}
+plot_grid(ggplot(wishbone_data, aes(x = tSNE1, y = tSNE2, colour = Trajectory)) + geom_point() +
+            scale_color_viridis(name = "pseudotime"),
+            ggplot(wishbone_data, aes(x = tSNE1, y = tSNE2, colour = Branch)) + geom_point() +
+            scale_color_viridis(name = "branch"), nrow = 1)
+```
+
+We're going to input just the first two principle components to our Bayesian mixture of factor analysers. Let's see what they look like as a function of wishbone pseudotime and branching:
+
+```{r plot-against-wishbone}
+X <- redDim(sce)
+
+## Visualise what these actually look like across pseudotime
+d <- as_data_frame(X[,1:2]) %>% 
+  mutate(pseudotime = wishbone_data$Trajectory,
+         branch = as.factor(wishbone_data$Branch)) %>% 
+  gather(feature, expression, -pseudotime, -branch) %>% 
+  mutate(feature = factor(feature, levels = paste0("PC", 1:ncol(X))))
+
+df_branch2 <- df_branch3 <- filter(d, branch == 1)
+df_branch2 %<>% mutate(branch = replace(branch, branch == 1, 2))
+df_branch3 %<>% mutate(branch = replace(branch, branch == 1, 3))
+
+d %<>% filter(branch != 1)
+d <- bind_rows(d, df_branch2, df_branch3)
+
+ggplot(d, aes(x = pseudotime, y = expression, color = branch)) +
+  geom_point(alpha = 0.1) + 
+  stat_smooth(se = TRUE, method = "lm") + facet_wrap(~ feature, scales = "free_y") +
+  scale_color_brewer(palette = "Set1")
+```
+
+We essentially have two "metagenes" as they call them - one that diverges across the bifurcation, and one that provides similar expression. Let's perform inference on this with MFA.
+
+### Inference
+
+# Model 2
+
+
+
+# Technical
+
+```{r sessionfo}
+sessionInfo()
+```
+
