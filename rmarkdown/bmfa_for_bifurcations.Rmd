@@ -23,6 +23,7 @@ library(scater)
 library(matrixStats)
 library(tidyr)
 library(magrittr)
+library(GGally)
 
 source("../scripts/gibbs_constr.R")
 
@@ -124,7 +125,7 @@ data_frame(pst_synth, tmap) %>%
 
 
 
-### Collapsed sampling for $c$
+### Collapsed sampling for $gamma$
 
 
 So far so good. But it would be nice if we were less sure about which branch the "early" samples were on. To do this we can perform collapsed Gibbs sampling by marginalising over the intercepts ($c$ parameters).
@@ -193,8 +194,10 @@ tpm <- t(tpm)
 colnames(tpm) <- cellnames
 
 sce <- newSCESet(exprsData = tpm, phenoData = new("AnnotatedDataFrame", pd))
+is_exprs(sce) <- exprs(sce) > 0
 sce <- calculateQCMetrics(sce)
 ```
+
 
 This comes with a pre-computed tSNE representation of the data along with the Wishbone assigned pseudotimes and branching structure. Let's plot:
 
@@ -205,9 +208,16 @@ plot_grid(ggplot(wishbone_data, aes(x = tSNE1, y = tSNE2, colour = Trajectory)) 
             scale_color_viridis(name = "branch"), nrow = 1)
 ```
 
+We can also see how well this correlates with PCA:
+
+```{r plot-pca-wb}
+sce <- plotPCA(sce, colour_by = "Trajectory", return_SCESet = TRUE)
+```
+
 We're going to input just the first two principle components to our Bayesian mixture of factor analysers. Let's see what they look like as a function of wishbone pseudotime and branching:
 
 ```{r plot-against-wishbone}
+
 X <- redDim(sce)
 
 ## Visualise what these actually look like across pseudotime
@@ -233,6 +243,111 @@ ggplot(d, aes(x = pseudotime, y = expression, color = branch)) +
 We essentially have two "metagenes" as they call them - one that diverges across the bifurcation, and one that provides similar expression. Let's perform inference on this with MFA.
 
 ### Inference
+
+Let's now perform non-collapsed inference:
+
+```{r nc-inference}
+g <- mfa_gibbs_constr(t(X[,1:2]), iter = 50000, 
+                      thin = 5, tau_k = 1, tau_c = 1,
+                      pc_initialise = 2, collapse = FALSE)
+
+mc <- to_ggmcmc(g)
+
+ggs_traceplot(filter(mc, Parameter == "lp__")) + stat_smooth()
+ggs_autocorrelation(filter(mc, Parameter == "lp__"))
+```
+
+```{r save-rep}
+save(g, file = "../data/mfa_2pc.Rdata")
+```
+
+We can display the MAP estimates based on the tSNE before:
+
+```{r plot-map-estimates, fig.width = 9}
+tmap <- posterior.mode(mcmc(g$pst_trace))
+gamma_mean <- colMeans(g$gamma_trace)
+
+tsne <- wishbone_data[,1:2]
+
+dp2 <- data.frame(redDim(sce)[,1:2], tsne, branch = gamma_mean, pseudotime = tmap,
+                  wishbone_branch = sce$Branch, wishbone_pseudotime = sce$Trajectory) %>% tbl_df()
+
+plot_grid(ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = pseudotime)) + geom_point() +
+            scale_color_viridis(name = "pseudotime"),
+          ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = branch)) + geom_point() +
+            scale_color_viridis(name = "branching"))
+```
+
+
+Let's compare our inferences to that of Wishbone and PC2:
+
+```{r compare-wb}
+data_frame(mfa = tmap, wishbone = dp2$wishbone_pseudotime, pc2 = redDim(sce)[,2]) %>% 
+  ggpairs()
+```
+
+You can see that it's highly correlated with PC2 as you would expect.
+
+We can also plot some marker gene expression:
+
+```{r plot-marker-genes}
+xm <- exprs(sce[c("CD34", "GATA1", "GATA2", "MPO"),] ) %>% 
+  t() %>% tbl_df() %>% mutate(pseudotime = tmap, branch = factor(round(gamma_mean))) %>% 
+  gather(Gene, Expression, - pseudotime, -branch)
+
+ggplot(xm, aes(x = pseudotime, y = Expression, color = branch)) +
+  geom_point(alpha = 0.1) + facet_wrap(~ Gene, scales = "free_y") +
+  scale_color_brewer(palette = "Set1") + scale_x_reverse() +
+  stat_smooth()
+```
+
+This is a little suspicious - we get effectively the same pseudotimes as Wishbone but see slightly different gene behaviour.
+
+### Collapsed sampling for $\gamma$
+
+Let's do the same as above but collapse the sampling for $\gamma$:
+
+
+```{r nc-inference-collapsed}
+gc <- mfa_gibbs_constr(t(X[,1:2]), iter = 50000, 
+                      thin = 5, tau_k = 1, tau_c = 1,
+                      pc_initialise = 2, collapse = TRUE)
+
+mcc <- to_ggmcmc(gc)
+
+ggs_traceplot(filter(mcc, Parameter == "lp__")) + stat_smooth()
+ggs_autocorrelation(filter(mcc, Parameter == "lp__"))
+```
+
+```{r save-rep-collapsed}
+save(gc, file = "../data/mfa_2pc_collapsed.Rdata")
+```
+
+We can display the MAP estimates based on the tSNE before:
+
+```{r plot-map-estimates-collapsed, fig.width = 9}
+tmap <- posterior.mode(mcmc(gc$pst_trace))
+gamma_mean <- colMeans(gc$gamma_trace)
+
+tsne <- wishbone_data[,1:2]
+
+dp2 <- data.frame(redDim(sce)[,1:2], tsne, branch = gamma_mean, pseudotime = tmap,
+                  wishbone_branch = sce$Branch, wishbone_pseudotime = sce$Trajectory) %>% tbl_df()
+
+plot_grid(ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = pseudotime)) + geom_point() +
+            scale_color_viridis(name = "pseudotime"),
+          ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = branch)) + geom_point() +
+            scale_color_viridis(name = "branching"))
+```
+
+
+Let's compare our inferences to that of Wishbone and PC2:
+
+```{r compare-wb-collapsed}
+data_frame(mfa = tmap, wishbone = dp2$wishbone_pseudotime, pc2 = redDim(sce)[,2]) %>% 
+  ggpairs()
+```
+
 
 # Model 2
 

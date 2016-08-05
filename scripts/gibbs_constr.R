@@ -175,14 +175,14 @@ mfa_gibbs_constr <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     
     ## updates for theta (k)
     lambda_theta <- tau_theta + G * tau_k
-    nu_theta <- tau_theta * theta_tilde + tau_k * c(sum(k0), sum(k1))
+    nu_theta <- tau_theta * theta_tilde + tau_k * c(sum(k0_new), sum(k1_new))
     nu_theta <- nu_theta / lambda_theta
     
     theta_new <- rnorm(2, nu_theta, 1 / sqrt(lambda_theta))
     
     ## updates for eta (c)
     lambda_eta <- tau_eta + G * tau_c
-    nu_eta <- tau_eta * eta_tilde + tau_c * c(sum(c0), sum(c1))
+    nu_eta <- tau_eta * eta_tilde + tau_c * c(sum(c0_new), sum(c1_new))
     nu_eta <- nu_eta / lambda_eta
     
     eta_new <- rnorm(2, nu_eta, 1 / sqrt(lambda_eta))
