@@ -29,6 +29,12 @@ source("scripts/gibbs_semi_ard.R")
 
 g <- mfa_gibbs_semi_ard(t(X), iter = 80000, thin = 40, collapse = TRUE)
 
+library(profvis)
+profvis({
+  g <- mfa_gibbs_semi_ard(t(X), iter = 200, thin = 1, collapse = TRUE)
+})
+
+
 mc <- to_ggmcmc(g)
 
 
@@ -161,6 +167,7 @@ tpm <- t(tpm)
 colnames(tpm) <- cellnames
 
 sce <- newSCESet(exprsData = tpm, phenoData = new("AnnotatedDataFrame", pd))
+is_exprs(sce) <- exprs(sce) > 0
 sce <- calculateQCMetrics(sce)
 
 sce <- plotPCA(sce, colour_by = "Branch", return_SCESet = TRUE)
@@ -188,7 +195,7 @@ X <- redDim(sce)
 d <- as_data_frame(X) %>% 
   mutate(pseudotime = wishbone_data$Trajectory,
          branch = as.factor(wishbone_data$Branch)) %>% 
-  gather(feature, expression, -pseudotime, -branch) %>% 
+  gather(feature, expression, -pseudotime, -branch) #%>% 
   mutate(feature = factor(feature, levels = paste0("PC", 1:ncol(X))))
 
 df_branch2 <- df_branch3 <- filter(d, branch == 1)
@@ -220,7 +227,7 @@ X <- t(exprs(sc)[genes[1:40], ])
 source("scripts/gibbs_semi_ard.R")
 
 g <- mfa_gibbs_semi_ard(t(X[,1:2]), iter = 40000, thin = 20, collapse = TRUE,
-                        pc_initialise = 2)
+                        pc_initialise = 2, eta_tilde = 0)
 
 
 mc <- to_ggmcmc(g)
@@ -301,5 +308,122 @@ ggplot(df, aes(x = tmap, y = Expression, color = branch)) + geom_point(alpha = 0
   facet_wrap(~ Gene, scales = "free_y") +
   scale_color_brewer(palette = "Set1") + 
   stat_smooth(se = FALSE, method = "lm") 
+
+
+
+# Time for some major cheating --------------------------------------------
+
+
+sc <- sce[rowMeans(exprs(sce) > 0) > 0.2, ] # expressed in at least 20% of cells
+
+## find genes correlated with trajectory
+
+gcors <- apply(exprs(sc), 1, function(x) cor(x, sc$Trajectory))
+bcors <- apply(exprs(sc), 1, function(x) {
+  a <- aov(x ~ as.factor(sc$Branch))
+  summary(a)[[1]][["Pr(>F)"]][1]
+})
+
+
+means <- rowMeans(exprs(sc))
+vars <- matrixStats::rowVars(exprs(sc))
+to_use <- vars > 8
+
+v <- data_frame(means, vars, to_use)
+ggplot(v, aes(x = means, y = vars, color = to_use)) + geom_point() +
+  scale_x_log10() + scale_y_log10() +
+  scale_color_brewer(palette = "Set1")
+
+# to_use_g <- abs(gcors) > 0.35
+# 
+# to_use <- to_use_g | to_use_b
+
+s <- sc[to_use, ]
+plotPCA(s, colour_by = "Branch")
+plotPCA(s, colour_by = "Trajectory")
+
+Y <- exprs(s)
+X <- t(Y)
+
+X <- scale(X)
+
+g <- mfa_gibbs_semi_ard(t(X), iter = 60000, thin = 30, collapse = FALSE,
+                        pc_initialise = 2, eta_tilde = 0)
+
+
+mc <- to_ggmcmc(g)
+
+ggs_traceplot(filter(mc, Parameter == "lp__")) + stat_smooth()
+ggs_autocorrelation(filter(mc, Parameter == "lp__"))
+
+
+tau_means <- filter(mc, grepl("tau_k", Parameter)) %>% 
+  group_by(Parameter) %>% summarise(map = mean(value)) %>% 
+  arrange(desc(map)) %>% 
+  mutate(Parameter = as.character(Parameter)) %>% 
+  mutate(Parameter = factor(Parameter, levels = Parameter))
+
+ggplot(tau_means, aes(x = Parameter, y = map)) + 
+  geom_bar(stat = "identity") + coord_flip() + scale_y_sqrt() +
+  scale_fill_brewer(name = "gene branches?", palette = "Set1") +
+  ylab(expression(paste(MAP, sqrt(tau)))) + xlab("Gene") 
+
+tmap <- posterior.mode(mcmc(g$pst_trace))
+gamma_mean <- colMeans(g$gamma_trace)
+branch <- round(gamma_mean)
+
+tsne <- wishbone_data[,1:2]
+
+dp2 <- data.frame(redDim(sce)[,1:2], tsne, branch = gamma_mean, pseudotime = tmap,
+                  wishbone_branch = sce$Branch, wishbone_pseudotime = sce$Trajectory) %>% tbl_df()
+
+plot_grid(ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = pseudotime)) + geom_point() +
+            scale_color_viridis(name = "pseudotime"),
+          ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = branch)) + geom_point() +
+            scale_color_viridis(name = "branching"))
+
+data_frame(tmap, trajectory = sc$Trajectory) %>% 
+  ggplot(aes(x = trajectory, y = tmap)) + geom_point(size = 2, alpha = 0.5)
+
+dx <- as_data_frame(prcomp(X)$x[,1:2]) %>% mutate(tmap, gamma_mean) 
+
+ggplot(dx, aes(x = PC1, y = PC2, color = tmap)) + geom_point() +
+  scale_color_viridis()
+
+ggplot(dx, aes(x = PC1, y = PC2, color = gamma_mean)) + geom_point() +
+  scale_color_viridis()
+
+# plot the expected behaviour
+
+k0 <- posterior.mode(mcmc(g$k0_trace))
+k1 <- posterior.mode(mcmc(g$k1_trace))
+c0 <- posterior.mode(mcmc(g$c0_trace))
+c1 <- posterior.mode(mcmc(g$c1_trace))
+
+#plot_expected_behaviour <- function(X, branch, tmap, gamma_mean, k0, k1, c0, c1) {
+d1 <- as_data_frame(X) %>% 
+  mutate(pseudotime = tmap, true_branch = as.factor(branch)) %>% 
+  gather(feature, expression, -pseudotime, -true_branch)
+
+branch0_mean <- sapply(seq_along(k0), function(g) c0[g] + k0[g] * tmap) %>% as_data_frame()
+branch1_mean <- sapply(seq_along(k1), function(g) c1[g] + k1[g] * tmap) %>% as_data_frame()
+
+names(branch0_mean) <- names(branch1_mean) <- colnames(X)
+
+branch0_mean %<>% mutate(true_branch = 0, pseudotime = tmap) %>% 
+  gather(feature, expression, -true_branch, -pseudotime)
+branch1_mean %<>% mutate(true_branch = 1, pseudotime = tmap) %>% 
+  gather(feature, expression, -true_branch, -pseudotime)
+d2 <- bind_rows(branch0_mean, branch1_mean) %>% 
+  mutate(true_branch = as.factor(true_branch))
+
+ggplot(d1, aes(x = pseudotime, y = expression, color = true_branch)) +
+  geom_point(alpha = 0.5) + scale_color_brewer(palette = "Set1") +
+  facet_wrap(~ feature, scales = "free_y") +
+  geom_line(data = d2)
+
+
+
+# What genes are we actually using ----------------------------------------
 
 
