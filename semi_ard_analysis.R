@@ -27,7 +27,7 @@ ggplot(dp, aes(x = PC1, y = PC2, colour = branch)) + geom_point()
 
 source("scripts/gibbs_semi_ard.R")
 
-g <- mfa_gibbs_semi_ard(t(X), iter = 80000, thin = 40, collapse = TRUE)
+g <- mfa_cpp(t(X), iter = 80000, thin = 40, collapse = TRUE)
 
 library(profvis)
 profvis({
@@ -152,7 +152,7 @@ ggplot(d1, aes(x = pseudotime, y = expression, color = true_branch)) +
 raw <- read_csv("data/wishbone_mouse_marrow_scrnaseq.csv")
 
 set.seed(1L)
-cells_to_sample <- sample(seq_len(nrow(raw)), 500)
+cells_to_sample <- sample(seq_len(nrow(raw)), 2000)
 
 tpm <- as.matrix(raw[cells_to_sample,-1])
 
@@ -294,7 +294,7 @@ plot_grid(ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + geom_point() +
 ggsave("~/Desktop/mfa_branching.png",width=8,height=4)
 
 
-ggplot(dp2, aes(x = wishbone_pseudotime, y = pseudotime)) + geom_point()
+ggplot(dp2, aes(x = wishbone_pseudotime, y = pseudotime, color = branch)) + geom_point()
 
 ggplot(dp2, aes(x = as.factor(wishbone_branch), y = branch)) + geom_boxplot()
 
@@ -347,8 +347,10 @@ X <- t(Y)
 
 X <- scale(X)
 
-g <- mfa_gibbs_semi_ard(t(X), iter = 60000, thin = 30, collapse = FALSE,
-                        pc_initialise = 2, eta_tilde = 0)
+profvis({
+  g <- mfa_cpp(t(X), iter = 100000, thin = 50, collapse = FALSE,
+                          pc_initialise = 2, eta_tilde = 0)
+})
 
 
 mc <- to_ggmcmc(g)
@@ -381,6 +383,12 @@ plot_grid(ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = pseudotime)) + geom_poi
             scale_color_viridis(name = "pseudotime"),
           ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = branch)) + geom_point() +
             scale_color_viridis(name = "branching"))
+
+plot_grid(ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point() +
+            scale_color_viridis(name = "pseudotime"),
+          ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + geom_point() +
+            scale_color_viridis(name = "branching"))
+
 
 data_frame(tmap, trajectory = sc$Trajectory) %>% 
   ggplot(aes(x = trajectory, y = tmap)) + geom_point(size = 2, alpha = 0.5)

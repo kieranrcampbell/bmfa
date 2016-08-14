@@ -387,36 +387,10 @@ mfa_cpp <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     c1_new <- sample_c(y, pst, k1_new, tau, eta[2], tau_c, which_1_l, N_1);
     
     
-    ## updates for pst
-    pst_updates <- sapply(seq_len(N), function(i) {
-      k <- c <- NULL # awhhh yeah look at that R code
-      if(gamma[i] == 0) {
-        k <- k0_new
-        c <- c0_new
-      } else {
-        k <- k1_new
-        c <- c1_new
-      }
-      lam_ti <- r^2 + sum(tau * k^2)
-      
-      nu_ti <- sum(tau * k * (y[i,] - c))
-      nu_ti <- nu_ti / lam_ti
-      return(c(nu_ti, lam_ti))
-    })
-    pst_new <- rnorm(N, pst_updates[1,], 1 / sqrt(pst_updates[2,]))
-    
-    # pst_new <- true_t ## REMOVE -------------------------------
-    
-    ## updates for tau
-    ## create a mu vector first for convenience
-    mu <- sapply(seq_len(G), function(g) {
-      (1 - gamma) * (c0_new[g] + k0_new[g] * pst_new) +
-        gamma * (c1_new[g] + k1_new[g] * pst_new)
-    })
-    
-    alpha_new <- rep(alpha + N / 2, N)
-    beta_new <- beta + colSums((y - mu)^2) / 2
-    tau_new <- rgamma(G, alpha_new, beta_new)
+    ## update for pseudotimes
+    pst_new <- sample_pst(y, k0_new, k1_new, c0_new, c1_new, r, gamma, tau);
+  
+    tau_new <- sample_tau(y, c0_new, c1_new, k0_new, k1_new, gamma, pst_new, alpha, beta)
     
     ## updates for theta (k)
     lambda_theta <- 2 * tau_k + tau_theta
@@ -439,35 +413,36 @@ mfa_cpp <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     tau_k_new <- rgamma(G, alpha_new, beta_new)
     
     
-    
-    
-    if(!collapse) {
-      pi <- sapply(seq_len(N), function(i) {
-        y_i <- y[i,]
-        comp0 <- sum(dnorm(y_i, mean = c0_new + k0_new * pst_new[i], 1 / sqrt(tau_new), log = TRUE))
-        comp1 <- sum(dnorm(y_i, mean = c1_new + k1_new * pst_new[i], 1 / sqrt(tau_new), log = TRUE))
-        pi_i <- comp0 - logSumExp(c(comp0, comp1))
-        return(exp(pi_i))
-      })
-    } else {
-      ## collapsed update for gamma
-      pi <- sapply(seq_len(N), function(i) {
-        y_i <- y[i,]
-        
-        comp0_mean <- eta_new[1] + k0 * pst_new[i]
-        comp0_var <- 1 / tau + 1 / tau_c
-        
-        comp1_mean <- eta_new[2] + k1 * pst_new[i]
-        comp1_var <- 1 / tau + 1 / tau_c
-        
-        comp0 <- sum(dnorm(y_i, mean = comp0_mean, sqrt(comp0_var), log = TRUE))
-        comp1 <- sum(dnorm(y_i, mean = comp1_mean, sqrt(comp1_var), log = TRUE))
-        
-        pi_i <- comp0 - logSumExp(c(comp0, comp1))
-        return(exp(pi_i))
-      })
-    }
-    gamma <- rbernoulli(1 - pi)
+
+    # if(!collapse) {
+    #   pi <- sapply(seq_len(N), function(i) {
+    #     y_i <- y[i,]
+    #     comp0 <- sum(dnorm(y_i, mean = c0_new + k0_new * pst_new[i], 1 / sqrt(tau_new), log = TRUE))
+    #     comp1 <- sum(dnorm(y_i, mean = c1_new + k1_new * pst_new[i], 1 / sqrt(tau_new), log = TRUE))
+    #     pi_i <- comp0 - log_sum_exp(c(comp0, comp1))
+    #     return(exp(pi_i))
+    #   })
+    # } else {
+    #   ## collapsed update for gamma
+    #   pi <- sapply(seq_len(N), function(i) {
+    #     y_i <- y[i,]
+    #     
+    #     comp0_mean <- eta_new[1] + k0 * pst_new[i]
+    #     comp0_var <- 1 / tau + 1 / tau_c
+    #     
+    #     comp1_mean <- eta_new[2] + k1 * pst_new[i]
+    #     comp1_var <- 1 / tau + 1 / tau_c
+    #     
+    #     comp0 <- sum(dnorm(y_i, mean = comp0_mean, sqrt(comp0_var), log = TRUE))
+    #     comp1 <- sum(dnorm(y_i, mean = comp1_mean, sqrt(comp1_var), log = TRUE))
+    #     
+    #     pi_i <- comp0 - log_sum_exp(c(comp0, comp1)) # logSumExp(c(comp0, comp1))
+    #     
+    #     return(exp(pi_i))
+    #   })
+    # }
+    pi <- calculate_pi(y, c0_new, c1_new, k0_new, k1_new, gamma, pst_new, tau_new, collapse)
+    gamma <- r_bernoulli_vec(1 - pi)
     
     
     
@@ -514,3 +489,4 @@ mfa_cpp <- function(y, iter = 2000, thin = 1, burn = iter / 2,
               tau_k_trace = tau_k_trace))
 }
 
+log_sum_exp <- function(x) log(sum(exp(x - max(x)))) + max(x)

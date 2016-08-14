@@ -1,15 +1,41 @@
 #include <Rcpp.h>
+#include <cmath>
+
 using namespace Rcpp;
 
-// This is a simple example of exporting a C++ function to R. You can
-// source this function into an R session using the Rcpp::sourceCpp 
-// function (or via the Source button on the editor toolbar). Learn
-// more about Rcpp at:
-//
-//   http://www.rcpp.org/
-//   http://adv-r.had.co.nz/Rcpp.html
-//   http://gallery.rcpp.org/
-//
+
+/***
+ * Convenience functions to compute log normal density and log sum of exponentials
+ */
+
+// [[Rcpp::export]]
+double log_d_norm(double x, double mu, double sigma) {
+  double ldn = -0.5 * log(2 * PI);
+  ldn -= log(sigma) + 1 / (2 * sigma * sigma) * (x - mu) * (x - mu);
+  return ldn;
+}
+
+// [[Rcpp::export]]
+double log_sum_exp(NumericVector x) {
+  double y;
+  y = log(sum(exp(x - max(x)))) + max(x);
+  return(y);
+}
+
+// [[Rcpp::export]]
+IntegerVector r_bernoulli_vec(NumericVector pi) {
+  int N = pi.size();
+  IntegerVector gamma(N);
+  NumericVector rands = runif(N);
+  for(int i = 0; i < N; i++) {
+    if(rands[i] < pi[i]) {
+      gamma[i] = 1;
+    } else {
+      gamma[i] = 0;
+    }
+  }
+  return gamma;
+}
 
 /*******
  * K sampling here
@@ -126,5 +152,148 @@ NumericVector sample_c(NumericMatrix y, NumericVector pst, NumericVector k,
     c_new[g] = as<double>(rnorm(1, nuc[g], 1 / sqrt(lamc[g])));
   
   return c_new;
+}
+
+/** 
+ * Pseudotime updates
+ * */
+
+/* 
+ *First column is lambda, second is mean. We explicitly calculate this to check 
+ *consistency with previous results.
+ */
+
+NumericMatrix pst_update_par(NumericMatrix y, NumericVector k0, NumericVector k1, NumericVector c0, NumericVector c1,
+                          double r, NumericVector gamma, NumericVector tau) {
+  int N = y.nrow();
+  int G = y.ncol();
+  
+  NumericMatrix pst_parameters(N, 2); // what we return
+  
+  // Placehold vectors for current branch
+  NumericVector k(G);
+  NumericVector c(G);
+  
+  double lam_ti, nu_ti;
+  
+  for(int i = 0; i < N; i++) {
+    nu_ti = 0;
+    
+    if(gamma[i] == 0) {
+      k = k0;
+      c = c0;
+    } else {
+      k = k1;
+      c = c1;
+    }
+    
+    lam_ti = pow(r, 2) + sum(tau * pow(k, 2));
+    for(int g = 0; g < G; g++) 
+      nu_ti += tau[g] * k[g] * (y(i,g) - c[g]);
+    
+    nu_ti /= lam_ti;
+    pst_parameters(i, 0) = nu_ti;
+    pst_parameters(i, 1) = lam_ti;
+  }
+  
+  return pst_parameters;
+}
+
+// [[Rcpp::export]]
+NumericVector sample_pst(NumericMatrix y, NumericVector k0, NumericVector k1, NumericVector c0, NumericVector c1,
+                         double r, NumericVector gamma, NumericVector tau) {
+  int N = y.nrow();
+  
+  NumericMatrix pst_pars(N, 2);
+  
+  pst_pars = pst_update_par(y, k0, k1, c0, c1, r, gamma, tau);
+  
+  NumericVector pst_new(N);
+  for(int i = 0; i < N; i++) {
+    pst_new[i] = as<double>(rnorm(1, pst_pars(i, 0), 1 / sqrt(pst_pars(i, 1))));
+  }
+  
+  return pst_new;
+}
+
+
+NumericMatrix tau_params(NumericMatrix y, NumericVector c0, NumericVector c1, NumericVector k0, NumericVector k1,
+                         NumericVector gamma, NumericVector pst, double alpha, double beta) {
+  int N = y.nrow();
+  int G = y.ncol();
+  
+  NumericMatrix alpha_beta(G, 2); // new alpha and beta: first column alpha, second beta
+  NumericMatrix mu(N, G);
+  
+  for(int i = 0; i < N; i++) {
+    for(int g = 0; g < G; g++) {
+      if(gamma[i] == 0) {
+        mu(i,g) = c0[g] + k0[g] * pst[i];
+      } else {
+        mu(i,g) = c1[g] + k1[g] * pst[i];
+      }
+    }
+  }
+  
+  for(int g = 0; g < G; g++) {
+    alpha_beta(g, 0) = alpha + N / 2;
+    double beta_new = beta;
+    for(int i = 0; i < N; i++)
+      beta_new += pow(y(i,g) - mu(i,g), 2) / 2;
+    
+    alpha_beta(g, 1) = beta_new;
+  }
+  
+  return alpha_beta;
+  
+  
+}
+
+// [[Rcpp::export]]
+NumericVector sample_tau(NumericMatrix y, NumericVector c0, NumericVector c1, NumericVector k0, NumericVector k1,
+                         NumericVector gamma, NumericVector pst, double alpha, double beta) {
+  // N = y.nrow();
+  int G = y.ncol();
+  
+  NumericVector tau(G);
+  NumericMatrix alpha_beta(G, 2);
+  alpha_beta = tau_params(y, c0, c1, k0, k1, gamma, pst, alpha, beta);
+  
+  for(int g = 0; g < G; g++) {
+    tau[g] = as<double>(rgamma(1, alpha_beta(g, 0), 1 / alpha_beta(g, 1))); // !!! RCPP gamma parametrised by shape - scale
+  }
+  
+  return tau;
+}
+
+
+
+// [[Rcpp::export]]
+NumericVector calculate_pi(NumericMatrix y, NumericVector c0, NumericVector c1, NumericVector k0, NumericVector k1,
+                           NumericVector gamma, NumericVector pst, NumericVector tau, bool collapse) {
+  int N = y.nrow();
+  int G = y.ncol();
+  
+  NumericVector pi(N);
+  if(!collapse) {
+    for(int i = 0; i < N; i++) {
+      double comp0 = 0, comp1 = 0;
+      for(int g = 0; g < G; g++) {
+        double y_ = y(i,g);
+        double comp0_mean = c0[g] + k0[g] * pst[i];
+        double comp1_mean = c1[g] + k1[g] * pst[i];
+        double sd = 1 / sqrt(tau[g]);
+
+        comp0 += log_d_norm(y_, comp0_mean, sd);
+        comp1 += log_d_norm(y_, comp1_mean, sd);
+      }
+      NumericVector comb(2);
+      comb[0] = comp0; comb[1] = comp1;
+      pi(i) = exp(comp0 - log_sum_exp(comb));
+    }
+  } else {
+    // to implement
+  }
+  return pi;
 }
 

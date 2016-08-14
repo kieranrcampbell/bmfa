@@ -4,6 +4,7 @@ Version: 0.0.0.9000
 Authors@R: person("Kieran", "Campbell", email = "kieranrcampbell@gmail.com", role = c("aut", "cre"))
 Description: Houdini models genomic bifurcations using a Bayesian hierarchical mixture of factor analysers.
 Depends: R (>= 3.3.0)
+Imports: ggplot2, Rcpp
 License: GPL >= 2
 Encoding: UTF-8
 LazyData: true
