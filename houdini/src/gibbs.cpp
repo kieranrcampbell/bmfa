@@ -270,12 +270,13 @@ NumericVector sample_tau(NumericMatrix y, NumericVector c0, NumericVector c1, Nu
 
 // [[Rcpp::export]]
 NumericVector calculate_pi(NumericMatrix y, NumericVector c0, NumericVector c1, NumericVector k0, NumericVector k1,
-                           NumericVector gamma, NumericVector pst, NumericVector tau, bool collapse) {
+                           NumericVector gamma, NumericVector pst, NumericVector tau, 
+                           NumericVector eta, double tau_c, bool collapse) {
   int N = y.nrow();
   int G = y.ncol();
   
   NumericVector pi(N);
-  if(!collapse) {
+  if(collapse == 0) {
     for(int i = 0; i < N; i++) {
       double comp0 = 0, comp1 = 0;
       for(int g = 0; g < G; g++) {
@@ -283,6 +284,7 @@ NumericVector calculate_pi(NumericMatrix y, NumericVector c0, NumericVector c1, 
         double comp0_mean = c0[g] + k0[g] * pst[i];
         double comp1_mean = c1[g] + k1[g] * pst[i];
         double sd = 1 / sqrt(tau[g]);
+        
 
         comp0 += log_d_norm(y_, comp0_mean, sd);
         comp1 += log_d_norm(y_, comp1_mean, sd);
@@ -292,7 +294,21 @@ NumericVector calculate_pi(NumericMatrix y, NumericVector c0, NumericVector c1, 
       pi(i) = exp(comp0 - log_sum_exp(comb));
     }
   } else {
-    // to implement
+    for(int i = 0; i < N; i++) {
+      double comp0 = 0, comp1 = 0;
+      for(int g = 0; g < G; g++) {
+        double y_ = y(i,g);
+        double comp0_mean = eta[0] + k0[g] * pst[i];
+        double comp1_mean = eta[1] + k1[g] * pst[i];
+        double sd = sqrt(1 / tau_c + 1 / sqrt(tau[g]));
+        
+        comp0 += log_d_norm(y_, comp0_mean, sd);
+        comp1 += log_d_norm(y_, comp1_mean, sd);
+      }
+      NumericVector comb(2);
+      comb[0] = comp0; comb[1] = comp1;
+      pi(i) = exp(comp0 - log_sum_exp(comb));
+    }
   }
   return pi;
 }

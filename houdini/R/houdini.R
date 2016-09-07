@@ -441,7 +441,8 @@ mfa_cpp <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     #     return(exp(pi_i))
     #   })
     # }
-    pi <- calculate_pi(y, c0_new, c1_new, k0_new, k1_new, gamma, pst_new, tau_new, collapse)
+    pi <-  calculate_pi(y, c0_new, c1_new, k0_new, k1_new, gamma, 
+                       pst_new, tau_new, eta_new, tau_c, collapse)
     gamma <- r_bernoulli_vec(1 - pi)
     
     
