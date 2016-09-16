@@ -338,7 +338,7 @@ mfa_cpp <- function(y, iter = 2000, thin = 1, burn = iter / 2,
   eta <- c(mean(c0), mean(c1))
   
   tau_k <- rep(1, G) # rgamma(G, alpha_k, beta_k)
-  tau_c <- 0.1 # rgamma(G, alpha_c, beta_c)
+  tau_c <- 1 # rgamma(G, alpha_c, beta_c)
   
   
   ## assignments for each cell

@@ -25,7 +25,7 @@ dp <- data.frame(prcomp(X)$x[,1:2], branch = as.factor(branch), pseudotime = tru
 ggplot(dp, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point() +
   scale_color_viridis(name = "Pseudotime")
 
-ggsave("figs/for_presentation/synthetic_pst.png", width = 5, height = 3)
+# ggsave("figs/for_presentation/synthetic_pst.png", width = 5, height = 3)
 
 ggplot(dp, aes(x = PC1, y = PC2, colour = branch)) + geom_point() +
   scale_color_brewer(palette = "Set1", name = "Branch")
@@ -37,8 +37,8 @@ source("houdini/R/houdini.R")
 sourceCpp("houdini/src/gibbs.cpp")
 
 set.seed(1L)
-g <- mfa_cpp(t(scale(X)), iter = 5e5, 
-             thin = 5e2, collapse = T, eta_tilde = 0)
+g <- mfa_cpp(t(scale(X)), iter = 1e5, 
+             thin = 1e2, collapse = T, eta_tilde = 0)
 
 #source("scripts/gibbs_semi_ard.R")
 #g <- mfa_gibbs_semi_ard(t(X), iter = 200000, thin = 100, collapse = TRUE, eta_tilde = 5)
@@ -53,7 +53,7 @@ ggs_autocorrelation(filter(mc, Parameter == "lp__"))
 
 branching_features <- paste0("tau_k[", 1:20, "]")
 tau_means <- filter(mc, grepl("tau_k", Parameter)) %>% 
-  group_by(Parameter) %>% summarise(map = 1 / mean(value)) %>% #posterior.mode(mcmc(value))) %>% 
+  group_by(Parameter) %>% summarise(map = 1 / posterior.mode(mcmc(value))) %>%  #/ mean(value)) %>% #
   mutate(is_branching = !(Parameter %in% branching_features))
 tau_means %<>% arrange(desc(map)) %>% 
   mutate(Parameter = as.character(Parameter)) %>% 
@@ -72,10 +72,12 @@ gamma_mean <- colMeans(g$gamma_trace)
 
 dp2 <- data.frame(prcomp(X)$x[,1:2], branch = gamma_mean, pseudotime = tmap)
 
-plt_map_pseudotime <- ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + geom_point() +
+plt_map_pseudotime <- ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + 
+  geom_point(size = 2) +
   scale_color_viridis(name = expression(paste("MAP ", t))) + theme_classic()
 
-plt_map_branch <- ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + geom_point() +
+plt_map_branch <- ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + 
+  geom_point(size = 2) +
   scale_color_viridis(name = expression(paste("MAP ", gamma))) + theme_classic()
 
 
@@ -89,7 +91,8 @@ print(cor(true_t, tmap, method = "spearman"))
 
 plot_grid(plt_map_pseudotime, plt_map_branch,
           plt_true_map, plt_tau_branch, labels = "AUTO")
-ggsave("~/Google Drive/campbell/pseudogp/mix-fa/manuscript/figs/toy.png", width = 11, height = 7)
+ggsave("~/Google Drive/campbell/mfa/manuscript/figs/toy.png", width = 8, height = 5)
+ggsave("~/Google Drive/campbell/mfa/nips/figs/nips_fig_1.png", width = 8, height = 5)
 
 ggsave("figs/for_presentation/synthetic_results.png", width = 11, height = 7)
 
@@ -364,7 +367,9 @@ X <- scale(X) # , scale = FALSE)
 
 
 set.seed(123L)
-grna <- mfa_cpp(t(X), iter = 50000, thin = 25, collapse = FALSE,
+grna <- mfa_cpp(t(X), iter = 50000, thin = 25, collapse = TRUE,
+                pc_initialise = 2, eta_tilde = 0)
+  grna <- mfa_cpp(t(X), iter = 50000, thin = 25, collapse = FALSE,
                       pc_initialise = 2, eta_tilde = 0)
 
 
@@ -389,13 +394,13 @@ plot_grid(ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = pseudotime)) + geom_poi
             scale_color_viridis(name = expression(paste("MAP ", t))),
           ggplot(dp2, aes(x = tSNE1, y = tSNE2, colour = branch)) + geom_point() +
             scale_color_viridis(name = expression(paste("MAP ", gamma))),
-          labels = "AUTO")
+          nrow = 2, labels = "AUTO")
 
 map_plt <- last_plot()
 
-ggsave("figs/for_presentation/wishbone_tsne.png", width = 10, height = 4)
-ggsave("~/Google Drive/campbell/pseudogp/mix-fa/manuscript/figs/wishbone_tsne.png",
-       width = 10, height = 4)
+# ggsave("figs/for_presentation/wishbone_tsne.png", width = 10, height = 4)
+# ggsave("~/Google Drive/campbell/pseudogp/mix-fa/manuscript/figs/wishbone_tsne.png",
+#        width = 10, height = 4)
 
 data_frame(tmap, trajectory = sc$Trajectory) %>% 
   ggplot(aes(x = trajectory, y = tmap)) + geom_point(size = 2, alpha = 0.5)
@@ -431,11 +436,11 @@ gplt <- plot_grid(plot_tsne_expression("ELANE"),
           plot_tsne_expression("RPL26"), 
           nrow = 3, labels = c("B", "C", "D"))
 
-plot_grid(chi_plot, gplt, nrow = 1, labels = c("A", ""))
-
-ggsave("figs/for_presentation/wishbone_ard.png", width = 8, height = 8)
-ggsave("~/Google Drive/campbell/pseudogp/mix-fa/manuscript/figs/wishbone_ard.png",
-       width = 8, height = 8)
+# plot_grid(chi_plot, gplt, nrow = 1, labels = c("A", ""))
+# 
+# ggsave("figs/for_presentation/wishbone_ard.png", width = 8, height = 8)
+# ggsave("~/Google Drive/campbell/pseudogp/mix-fa/manuscript/figs/wishbone_ard.png",
+#        width = 8, height = 8)
 
 
 ##### NIPS plot #######
@@ -445,11 +450,11 @@ gplt <- plot_grid(plot_tsne_expression("ELANE"),
                   plot_tsne_expression("RPL26"), 
                   nrow = 3, labels = c("D", "", ""))
 
-lower_grid <- plot_grid(chi_plot, gplt, ncol = 2, labels = c("C", ""))
+# lower_grid <- plot_grid(chi_plot, gplt, ncol = 2, labels = c("C", ""))
 
-plot_grid(map_plt, lower_grid, nrow = 2, rel_heights = c(1, 2))
-ggsave("figs/nips_fig_2.png", width = 8, height = 11)
-ggsave("~/Google Drive/campbell/mfa/nips/figs/nips_fig_2.png", width = 8, height = 11)
+plot_grid(map_plt, chi_plot, gplt, ncol = 3, labels = c("", "C", ""))
+ggsave("figs/nips_fig_2.png", width = 11, height = 7)
+ggsave("~/Google Drive/campbell/mfa/nips/figs/nips_fig_2.png", width = 11, height = 7)
 
 ###########
 
