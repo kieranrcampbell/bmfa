@@ -79,15 +79,15 @@ multi_mfa <- function(y, iter = 2000, thin = 1, burn = iter / 2, b = 2,
   ## c & k parameters
   lms <- apply(y, 2, function(gex) coef(lm(gex ~ pst)))
   theta <- theta0 <- lms[2, ]
-  k <- matrix(NA, nrow = b, ncol = G)
-  for(i in seq_len(b)) k[i,] <- lms[2,]
+  k <- matrix(NA, nrow = G, ncol = b)
+  for(i in seq_len(b)) k[,i] <- lms[2,]
   
-  c <- matrix(NA, nrow = b, ncol = G)
-  for(i in seq_len(b)) c[i,] <- lms[1,]
+  c <- matrix(NA, nrow = G, ncol = b)
+  for(i in seq_len(b)) c[,i] <- lms[1,]
   
-  eta <- rowMeans(c)
+  eta <- colMeans(c)
   
-  tau_k <- rep(1, G) # rgamma(G, alpha_k, beta_k)
+  chi <- rep(1, G) # rgamma(G, alpha_k, beta_k)
   tau_c <- 0.1 # rgamma(G, alpha_c, beta_c)
   
   
@@ -118,62 +118,45 @@ multi_mfa <- function(y, iter = 2000, thin = 1, burn = iter / 2, b = 2,
   rownames(y) <- colnames(y) <- NULL
   
   for(it in 1:iter) {
+
+    k_new <- sapply(seq_len(b), function(branch) sample_k(y, pst, c[branch, ], tau, theta, chi, which(gamma == branch)))
     
-    ## set which and N parameters
-    which_0 <- which(gamma == 0)
-    which_1 <- which(gamma == 1)
+    c_new <- sapply(seq_len(b), function(branch) sample_c(y, pst, k_new[, branch], tau, eta[branch], tau_c, which(gamma == branch), sum(gamma == branch)))
     
-    which_0_l <- gamma == 0
-    which_1_l <- !which_0_l
-    
-    N_0 <- length(which_0)
-    N_1 <- length(which_1)
-    
-    k0_new <- sample_k(y, pst, c0, tau, theta, tau_k, which_0_l)
-    k1_new <- sample_k(y, pst, c1, tau, theta, tau_k, which_1_l)
-    
-    
-    ## update for c0
-    c0_new <- sample_c(y, pst, k0_new, tau, eta[1], tau_c, which_0_l, N_0);
-    c1_new <- sample_c(y, pst, k1_new, tau, eta[2], tau_c, which_1_l, N_1);
-    
-    
+
     ## update for pseudotimes
-    pst_new <- sample_pst(y, k0_new, k1_new, c0_new, c1_new, r, gamma, tau);
+    pst_new <- sample_pst(y, c_new, k_new, r, gamma, tau);
   
-    tau_new <- sample_tau(y, c0_new, c1_new, k0_new, k1_new, gamma, pst_new, alpha, beta)
+    tau_new <- sample_tau(y, c_new, k_new, gamma, pst_new, alpha, beta)
     
     ## updates for theta (k)
     lambda_theta <- 2 * tau_k + tau_theta
-    nu_theta <- tau_theta * theta_tilde + tau_k * (k0_new + k1_new)
+    nu_theta <- tau_theta * theta_tilde + tau_k * rowSums(k_new)
     nu_theta <- nu_theta / lambda_theta
     
     theta_new <- rnorm(G, nu_theta, 1 / sqrt(lambda_theta))
-    # theta_new <- theta0 # REMOVE ------
-    
+
     ## updates for eta (c)
     lambda_eta <- tau_eta + G * tau_c
-    nu_eta <- tau_eta * eta_tilde + tau_c * c(sum(c0_new), sum(c1_new))
+    nu_eta <- tau_eta * eta_tilde + tau_c * rowSums(c_new)
     nu_eta <- nu_eta / lambda_eta
     
     eta_new <- rnorm(2, nu_eta, 1 / sqrt(lambda_eta))
     
     ## update for tau_k
     alpha_new <- alpha_k + 1
-    beta_new <- beta_k + 0.5 * ( (k0_new - theta_new)^2 + (k1_new - theta_new)^2 )
+    beta_new <- beta_k + 0.5 * rowSums( (k_new - theta_new)^2 )
     tau_k_new <- rgamma(G, alpha_new, beta_new)
     
 
-    pi <-  calculate_pi(y, c0_new, c1_new, k0_new, k1_new, gamma, 
+    pi <-  calculate_pi(y, c_new, k_new, gamma, 
                        pst_new, tau_new, eta_new, tau_c, collapse)
     gamma <- r_bernoulli_vec(1 - pi)
 
     ## accept new parameters
     # gamma <- gamma_new
-    k0 <- k0_new
-    k1 <- k1_new
-    c0 <- c0_new
-    c1 <- c1_new
+    k <- k_new
+    c <- c_new
     pst <- pst_new
     tau <- tau_new
     eta <- eta_new

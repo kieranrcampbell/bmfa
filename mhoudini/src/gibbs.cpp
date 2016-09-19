@@ -163,30 +163,25 @@ NumericVector sample_c(NumericMatrix y, NumericVector pst, NumericVector k,
  *consistency with previous results.
  */
 
-NumericMatrix pst_update_par(NumericMatrix y, NumericVector k0, NumericVector k1, NumericVector c0, NumericVector c1,
+NumericMatrix pst_update_par(NumericMatrix y, NumericMatrix c, NumericMatrix k, 
                           double r, NumericVector gamma, NumericVector tau) {
   int N = y.nrow();
   int G = y.ncol();
-  
+
   NumericMatrix pst_parameters(N, 2); // what we return
   
   // Placehold vectors for current branch
-  NumericVector k(G);
-  NumericVector c(G);
+  NumericVector k_(G);
+  NumericVector c_(G);
   
   double lam_ti, nu_ti;
   
   for(int i = 0; i < N; i++) {
     nu_ti = 0;
     
-    if(gamma[i] == 0) {
-      k = k0;
-      c = c0;
-    } else {
-      k = k1;
-      c = c1;
-    }
-    
+    k_ = k(_, gamma[i] - 1); // C++ as 0 indexing
+    c_ = c(_, gamma[i] - 1);
+
     lam_ti = pow(r, 2) + sum(tau * pow(k, 2));
     for(int g = 0; g < G; g++) 
       nu_ti += tau[g] * k[g] * (y(i,g) - c[g]);
@@ -200,13 +195,13 @@ NumericMatrix pst_update_par(NumericMatrix y, NumericVector k0, NumericVector k1
 }
 
 // [[Rcpp::export]]
-NumericVector sample_pst(NumericMatrix y, NumericVector k0, NumericVector k1, NumericVector c0, NumericVector c1,
+NumericVector sample_pst(NumericMatrix y, NumericMatrix c, NumericMatrix k, 
                          double r, NumericVector gamma, NumericVector tau) {
   int N = y.nrow();
-  
+
   NumericMatrix pst_pars(N, 2);
   
-  pst_pars = pst_update_par(y, k0, k1, c0, c1, r, gamma, tau);
+  pst_pars = pst_update_par(y, c, k, r, gamma, tau);
   
   NumericVector pst_new(N);
   for(int i = 0; i < N; i++) {
@@ -217,7 +212,7 @@ NumericVector sample_pst(NumericMatrix y, NumericVector k0, NumericVector k1, Nu
 }
 
 
-NumericMatrix tau_params(NumericMatrix y, NumericVector c0, NumericVector c1, NumericVector k0, NumericVector k1,
+NumericMatrix tau_params(NumericMatrix y, NumericMatrix c, NumericMatrix k,
                          NumericVector gamma, NumericVector pst, double alpha, double beta) {
   int N = y.nrow();
   int G = y.ncol();
@@ -227,11 +222,7 @@ NumericMatrix tau_params(NumericMatrix y, NumericVector c0, NumericVector c1, Nu
   
   for(int i = 0; i < N; i++) {
     for(int g = 0; g < G; g++) {
-      if(gamma[i] == 0) {
-        mu(i,g) = c0[g] + k0[g] * pst[i];
-      } else {
-        mu(i,g) = c1[g] + k1[g] * pst[i];
-      }
+      mu(i,g) = c(g, gamma[i] - 1) + k(g, gamma[i] - 1) * pst[i];
     }
   }
   
@@ -250,14 +241,14 @@ NumericMatrix tau_params(NumericMatrix y, NumericVector c0, NumericVector c1, Nu
 }
 
 // [[Rcpp::export]]
-NumericVector sample_tau(NumericMatrix y, NumericVector c0, NumericVector c1, NumericVector k0, NumericVector k1,
+NumericVector sample_tau(NumericMatrix y, NumericMatrix c, NumericMatrix k,
                          NumericVector gamma, NumericVector pst, double alpha, double beta) {
   // N = y.nrow();
   int G = y.ncol();
   
   NumericVector tau(G);
   NumericMatrix alpha_beta(G, 2);
-  alpha_beta = tau_params(y, c0, c1, k0, k1, gamma, pst, alpha, beta);
+  alpha_beta = tau_params(y, c, k, gamma, pst, alpha, beta);
   
   for(int g = 0; g < G; g++) {
     tau[g] = as<double>(rgamma(1, alpha_beta(g, 0), 1 / alpha_beta(g, 1))); // !!! RCPP gamma parametrised by shape - scale
@@ -269,25 +260,28 @@ NumericVector sample_tau(NumericMatrix y, NumericVector c0, NumericVector c1, Nu
 
 
 // [[Rcpp::export]]
-NumericVector calculate_pi(NumericMatrix y, NumericVector c0, NumericVector c1, NumericVector k0, NumericVector k1,
+NumericVector calculate_pi(NumericMatrix y, NumericMatrix c, NumericMatrix k,
                            NumericVector gamma, NumericVector pst, NumericVector tau, 
                            NumericVector eta, double tau_c, bool collapse) {
   int N = y.nrow();
   int G = y.ncol();
+  int b = c.ncol(); // number of branches
   
-  NumericVector pi(N);
+  NumericMatrix pi(N,b); // probability of class membership for cell (row) and branch (column)
+
   if(collapse == 0) {
     for(int i = 0; i < N; i++) {
-      double comp0 = 0, comp1 = 0;
+      NumericVector comp_ll(b, 0.0); // log-likelihood vector for each branch, default to 0.0
+      
       for(int g = 0; g < G; g++) {
         double y_ = y(i,g);
-        double comp0_mean = c0[g] + k0[g] * pst[i];
-        double comp1_mean = c1[g] + k1[g] * pst[i];
         double sd = 1 / sqrt(tau[g]);
         
-
-        comp0 += log_d_norm(y_, comp0_mean, sd);
-        comp1 += log_d_norm(y_, comp1_mean, sd);
+        for(int branch = 0; branch < b; branch++) {
+          double comp_mean = c(g, branch) + k(g, branch) * pst[i];
+          comp_ll(b) += log_d_norm(y_, comp_mean, sd)
+        }
+        
       }
       NumericVector comb(2);
       comb[0] = comp0; comb[1] = comp1;
