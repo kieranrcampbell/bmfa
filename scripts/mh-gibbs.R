@@ -28,14 +28,17 @@ sdnl <- function(x, mean = 0, tau = 1, log = TRUE) sum(dnorm(x, mean, 1 / sqrt(t
 eval_likelihood <- function(y, pst, k0, k1, phi0, phi1, delta0, delta1, 
                             tau, gamma, tau_k, tau_phi, tau_delta,
                             alpha, beta) {
+  G <- ncol(y)
+  N <- nrow(y)
+  
   # mean assuming all cells are on branch 0
   mu0 <- t(sapply(pst, function(t) mu_cg(k0, phi0, delta0, t)))
   # mean assuming all cells are on branch 1
   mu1 <- t(sapply(pst, function(t) mu_cg(k1, phi1, delta1, t)))
   # likelihood assuming all cells are on branch 0
-  ll0 <- dnorm(y, mu0, 1 / sqrt(tau), log = TRUE)
+  ll0 <- sapply(seq_len(G), function(g) dnorm(y[,g], mu0[,g], 1 / sqrt(tau[g]), log = TRUE))
   # likelihood assuming all cells are on branch 1
-  ll1 <- dnorm(y, mu1, 1 / sqrt(tau), log = TRUE)
+  ll1 <- sapply(seq_len(G), function(g) dnorm(y[,g], mu1[,g], 1 / sqrt(tau[g]), log = TRUE))
   
   ll <- sum(ll0[gamma == 0, ]) + sum(ll1[gamma == 1, ])
   
@@ -312,7 +315,8 @@ mcmc_status_message <- function(it, iter) {
 #' if the name appears then those values are held fixed
 mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
                      proposals = list(kappa_t = 0.05, kappa_k = 0.5, kappa_delta = 0.1),
-                     fixed = list(), ptype = c("joint", "individual")) {
+                     fixed = list(), ptype = c("joint", "individual"),
+                     pst_init = NULL) {
   ptype <- match.arg(ptype)
 
   G <- ncol(y)
@@ -323,9 +327,18 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
   ## assignments for each cell
   gamma <- sample(0:1, N, replace = TRUE)
   
-  ## c & k parameters
-  k0 <- k1 <- rep(0, G)
-  phi0 <- phi1 <- rep(1, G)
+  if(is.null(pst_init)) {
+    pst <- rep(0.5, N) # rnorm(N, 0, 1 / r^2)
+  } else {
+    pst <- pst_init
+  }
+  
+  if(is.null(pst_init)) {
+    k0 <- k1 <- rep(0, G)
+  } else {
+    k0 <- k1 <- apply(y, 2, function(yy) coef(lm(yy ~ pst_init))[2])
+  }
+  phi0 <- phi1 <- colMeans(y)
   delta0 <- delta1 <- rep(0.5, G)
   
   ## proposal stdevs
@@ -336,7 +349,7 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
   ## precision parameters
   alpha <- 2
   beta <- 1
-  tau <- rgamma(G, shape = alpha, rate = beta)
+  tau <- 1 / matrixStats::colVars(y)
   
   ## percision hyperpriors
   tau_k <- tau_phi <- 1
@@ -344,7 +357,6 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
   
   ## pseudotime parameters
   r <- 1
-  pst <- rep(0.5, N) # rnorm(N, 0, 1 / r^2)
   
   nsamples <- floor((iter - burn) / thin)
   G_dim <- c(nsamples, G)
@@ -373,14 +385,18 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     stopifnot(!(any(pst < 0) | any(pst > 1)))
     
     ## update for gamma
-    pi <- sapply(seq_len(N), function(i) {
-      y_i <- y[i,]
-      comp0 <- sum(dnorm(y_i, mean = mu_cg(k0, phi0, delta0, pst[i]), 1 / sqrt(tau), log = TRUE))
-      comp1 <- sum(dnorm(y_i, mean = mu_cg(k1, phi1, delta1, pst[i]), 1 / sqrt(tau), log = TRUE))
-      pi_i <- comp0 - logSumExp(c(comp0, comp1))
-      return(exp(pi_i))
-    })
-    gamma_new <- rbernoulli(1 - pi)
+    if("gamma" %in% names(fixed)) {
+      gamma_new <- fixed$gamma
+    } else {
+      pi <- sapply(seq_len(N), function(i) {
+        y_i <- y[i,]
+        comp0 <- sum(dnorm(y_i, mean = mu_cg(k0, phi0, delta0, pst[i]), 1 / sqrt(tau), log = TRUE))
+        comp1 <- sum(dnorm(y_i, mean = mu_cg(k1, phi1, delta1, pst[i]), 1 / sqrt(tau), log = TRUE))
+        pi_i <- comp0 - logSumExp(c(comp0, comp1))
+        return(exp(pi_i))
+      })
+      gamma_new <- rbernoulli(1 - pi)
+    }
     
     ## set which and N parameters
     which_0 <- which(gamma_new == 0)
@@ -460,13 +476,18 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     mu0 <- mu0[gamma_new == 0, , drop = FALSE]
     mu1 <- mu1[gamma_new == 1, , drop = FALSE]
     
+    if(length(tau) != length(colSums(mu0^2))) {
+      message("Length mismatch!")
+      print(c(length(tau), length(colSums(mu0^2))))
+    }
+    
     lam0 <- tau_phi + tau * colSums(mu0^2)
-    nu0 <- (tau_phi * phi1 + tau * colSums(y[gamma_new == 0, ] * mu0)) / lam0
-    phi0_new <- rnorm(nu0, 1 / sqrt(lam0))
+    nu0 <- (tau_phi * phi1 + tau * colSums(y[gamma_new == 0, ,drop=FALSE] * mu0)) / lam0
+    phi0_new <- rnorm(G, nu0, 1 / sqrt(lam0))
     
     lam1 <- tau_phi + tau * colSums(mu1^2)
-    nu1 <- (tau_phi * phi0_new + tau * colSums(y[gamma_new == 1, ] * mu1)) / lam1
-    phi1_new <- rnorm(nu1, 1 / sqrt(lam1))
+    nu1 <- (tau_phi * phi0_new + tau * colSums(y[gamma_new == 1, ,drop=FALSE] * mu1)) / lam1
+    phi1_new <- rnorm(G, nu1, 1 / sqrt(lam1))
     
     
     #' Updates for tau ------
@@ -476,7 +497,7 @@ mh_gibbs <- function(y, iter = 2000, thin = 1, burn = iter / 2,
     
     mu <- matrix(NA, nrow = N, ncol = G)
     mu[gamma_new == 0, ] <- mu0[gamma_new == 0, ]
-    mu[gamma_new == 1, ] <- mu0[gamma_new == 1, ]
+    mu[gamma_new == 1, ] <- mu1[gamma_new == 1, ]
     
     alpha_new <- rep(alpha + N / 2, N)
     beta_new <- beta + colSums((y - mu)^2) / 2

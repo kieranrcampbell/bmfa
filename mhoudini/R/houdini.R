@@ -11,31 +11,32 @@ mcmcify <- function(m, name) {
   return(m)
 }
 
-posterior <- function(y, c0, c1, k0, k1, pst, tau, gamma, theta, eta, tau_k, tau_c, r, alpha, beta,
+posterior <- function(y, c, k, pst, tau, gamma, theta, eta, chi, tau_c, r, alpha, beta,
                       theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_k, beta_k) {
   G <- ncol(y)
   N <- nrow(y)
+  b <- ncol(k)
   
-  zero_ll <- sapply(seq_len(N), function(i) {
-    sum(dnorm(y[i,], c0 + k0 + pst[i], 1 / sqrt(tau), log = TRUE))
+  branch_likelihoods <- sapply(seq_len(b), function(branch) {
+    ll_branch <- sapply(seq_len(N), function(i) {
+        sum(dnorm(y[i,], c[,branch] + k[branch] * pst[i], 1 / sqrt(tau), log = TRUE))
+    })
+    sum(ll_branch[gamma == branch])
   })
+    
+  ll <- sum(branch_likelihoods)
   
-  one_ll <- sapply(seq_len(N), function(i) {
-    sum(dnorm(y[i,], c1 + k1 + pst[i], 1 / sqrt(tau), log = TRUE))
-  })
-        
-  ll <- sum(zero_ll[gamma == 0]) + sum(one_ll[gamma == 1])
-
-  prior <- sum(dnorm(k0, theta, 1 / sqrt(tau_k), log = TRUE)) +
-    sum(dnorm(k1, theta, 1 / sqrt(tau_k), log = TRUE)) +
-    sum(dnorm(c0, eta[1], 1 / sqrt(tau_c), log = TRUE)) +
-    sum(dnorm(c1, eta[2], 1 / sqrt(tau_c), log = TRUE)) +
+  prior <- 
     sum(dnorm(theta, theta_tilde, 1 / sqrt(tau_theta), log = TRUE)) +
     sum(dnorm(eta, eta_tilde, 1 / sqrt(tau_eta), log = TRUE)) +
     sum(dgamma(tau, alpha, beta, log = TRUE)) +
     sum(dnorm(pst, 0, 1 / r, log = TRUE)) +
-    sum(dgamma(tau_k, alpha_k, beta_k, log = TRUE)) 
+    sum(dgamma(chi, alpha_k, beta_k, log = TRUE)) 
   
+  k_prior <- sum( apply(k, 2, function(k_b) sum(dnorm(k_b, theta, 1 / sqrt(chi), log = TRUE))) )
+  c_prior <- sum( sapply(seq_len(b), function(branch) sum(dnorm(c[,branch], eta[branch], 1 / sqrt(tau_c), log = TRUE)))) 
+  
+  prior <- prior + k_prior + c_prior
   
   return( ll + prior )
 }
@@ -88,24 +89,20 @@ multi_mfa <- function(y, iter = 2000, thin = 1, burn = iter / 2, b = 2,
   eta <- colMeans(c)
   
   chi <- rep(1, G) # rgamma(G, alpha_k, beta_k)
-  tau_c <- 0.1 # rgamma(G, alpha_c, beta_c)
+  tau_c <- 1 # 0.1 # rgamma(G, alpha_c, beta_c)
   
   
   ## assignments for each cell
   gamma <- sample(seq_len(b), N, replace = TRUE) # as.numeric( pst < mean(pst)  ) #
-  # gamma <- branch # REMOVE-------
-  
+
   nsamples <- floor((iter - burn) / thin)
   G_dim <- c(nsamples, G)
   N_dim <- c(nsamples, N)
   
-  eta_trace <- mcmcify(matrix(NA, nrow = nsamples, ncol = 2), "eta")
+  eta_trace <- mcmcify(matrix(NA, nrow = nsamples, ncol = b), "eta")
   theta_trace <- mcmcify(matrix(NA, nrow = G_dim[1], ncol = G_dim[2]), "theta")
   chi_trace <- mcmcify(matrix(NA, nrow = G_dim[1], ncol = G_dim[2]), "chi")
-  # k0_trace <- mcmcify(matrix(NA, nrow = G_dim[1], ncol = G_dim[2]), "k0")
-  # k1_trace <- mcmcify(matrix(NA, nrow = G_dim[1], ncol = G_dim[2]), "k1")
-  # c0_trace <- mcmcify(matrix(NA, nrow = G_dim[1], ncol = G_dim[2]), "c0")
-  # c1_trace <- mcmcify(matrix(NA, nrow = G_dim[1], ncol = G_dim[2]), "c1")
+  
   k_trace <- array(dim = c(nsamples, b, G))
   c_trace <- array(dim = c(nsamples, b, G))
   
@@ -118,11 +115,18 @@ multi_mfa <- function(y, iter = 2000, thin = 1, burn = iter / 2, b = 2,
   rownames(y) <- colnames(y) <- NULL
   
   for(it in 1:iter) {
+    
 
-    k_new <- sapply(seq_len(b), function(branch) sample_k(y, pst, c[branch, ], tau, theta, chi, which(gamma == branch)))
     
-    c_new <- sapply(seq_len(b), function(branch) sample_c(y, pst, k_new[, branch], tau, eta[branch], tau_c, which(gamma == branch), sum(gamma == branch)))
+    k_new <- sapply(seq_len(b), function(branch) sample_k(y, pst, c[, branch], tau, theta, chi, gamma == branch))
     
+    c_new <- sapply(seq_len(b), function(branch) sample_c(y, pst, k_new[, branch], tau, eta[branch], tau_c, gamma == branch, sum(gamma == branch)))
+    
+    
+    # ## remove
+    # calculate_nuc(y, pst, k_new[,branch], tau, eta, tau_c, which())
+    # 
+    ####
 
     ## update for pseudotimes
     pst_new <- sample_pst(y, c_new, k_new, r, gamma, tau);
@@ -130,68 +134,79 @@ multi_mfa <- function(y, iter = 2000, thin = 1, burn = iter / 2, b = 2,
     tau_new <- sample_tau(y, c_new, k_new, gamma, pst_new, alpha, beta)
     
     ## updates for theta (k)
-    lambda_theta <- 2 * tau_k + tau_theta
-    nu_theta <- tau_theta * theta_tilde + tau_k * rowSums(k_new)
+    lambda_theta <- 2 * chi + tau_theta
+    nu_theta <- tau_theta * theta_tilde + chi * rowSums(k_new)
     nu_theta <- nu_theta / lambda_theta
     
     theta_new <- rnorm(G, nu_theta, 1 / sqrt(lambda_theta))
 
     ## updates for eta (c)
     lambda_eta <- tau_eta + G * tau_c
-    nu_eta <- tau_eta * eta_tilde + tau_c * rowSums(c_new)
+    nu_eta <- tau_eta * eta_tilde + tau_c * colSums(c_new)
     nu_eta <- nu_eta / lambda_eta
     
-    eta_new <- rnorm(2, nu_eta, 1 / sqrt(lambda_eta))
+    eta_new <- rnorm(length(nu_eta), nu_eta, 1 / sqrt(lambda_eta))
     
     ## update for tau_k
     alpha_new <- alpha_k + 1
     beta_new <- beta_k + 0.5 * rowSums( (k_new - theta_new)^2 )
-    tau_k_new <- rgamma(G, alpha_new, beta_new)
-    
+    chi_new <- rgamma(G, alpha_new, beta_new)
 
-    pi <-  calculate_pi(y, c_new, k_new, gamma, 
-                       pst_new, tau_new, eta_new, tau_c, collapse)
-    gamma <- r_bernoulli_vec(1 - pi)
+    pi <-  calculate_pi(y, c_new, k_new, pst_new, tau_new, eta_new, tau_c, collapse)
+    gamma <- r_bernoulli_mat(pi) + 1 # need +1 to convert from C++ to R
+    # print(table(gamma))
 
-    ## accept new parameters
-    # gamma <- gamma_new
     k <- k_new
     c <- c_new
     pst <- pst_new
     tau <- tau_new
     eta <- eta_new
     theta <- theta_new
-    tau_k <- tau_k_new
+    chi <- chi_new
     # tau_c <- tau_c_new
     
     if((it > burn) && (it %% thin == 0)) {
       sample_pos <- (it - burn) / thin
-      k0_trace[sample_pos,] <- k0
-      k1_trace[sample_pos,] <- k1
-      c0_trace[sample_pos,] <- c0
-      c1_trace[sample_pos,] <- c1
+      # k0_trace[sample_pos,] <- k0
+      # k1_trace[sample_pos,] <- k1
+      # c0_trace[sample_pos,] <- c0
+      # c1_trace[sample_pos,] <- c1
       tau_trace[sample_pos,] <- tau
       gamma_trace[sample_pos,] <- gamma
       pst_trace[sample_pos,] <- pst
       theta_trace[sample_pos,] <- theta
+      
       eta_trace[sample_pos,] <- eta
-      tau_k_trace[sample_pos,] <- tau_k
+      # tau_k_trace[sample_pos,] <- tau_k
       # tau_c_trace[sample_pos,] <- tau_c
       
-      post <- posterior(y, c0, c1, k0, k1, pst,
-                        tau, gamma, theta, eta, tau_k, tau_c, r,
+      post <- posterior(y, c, k, pst,
+                        tau, gamma, theta, eta, chi, tau_c, r,
                         alpha, beta, theta_tilde, 
                         eta_tilde, tau_theta, tau_eta,
                         alpha_k, beta_k)
       lp_trace[sample_pos,] <- post 
     }
   }
-  return(list(k0_trace = k0_trace, k1_trace = k1_trace,
-              c0_trace = c0_trace, c1_trace = c1_trace,
+  return(list(#k0_trace = k0_trace, k1_trace = k1_trace,
+              #c0_trace = c0_trace, c1_trace = c1_trace,
               tau_trace = tau_trace, gamma_trace = gamma_trace,
               pst_trace = pst_trace, theta_trace = theta_trace,
-              eta_trace = eta_trace, lp_trace = lp_trace,
-              tau_k_trace = tau_k_trace))
+              eta_trace = eta_trace, lp_trace = lp_trace))
 }
 
 log_sum_exp <- function(x) log(sum(exp(x - max(x)))) + max(x)
+
+map_branch <- function(g) {
+  gamma <- g$gamma_trace
+  df <- apply(gamma, 2, function(gam) {
+    tab <- table(gam)
+    max <- which.max(tab)
+    max_n <- as.integer(names(max))
+    prop <- mean(gam == max_n)
+    return(c(max_n, prop))
+  })
+  df <- t(df) %>% as_data_frame()
+  names(df) <- c("max", "prop")
+  return(df)
+}

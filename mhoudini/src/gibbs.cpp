@@ -23,15 +23,24 @@ double log_sum_exp(NumericVector x) {
 }
 
 // [[Rcpp::export]]
-IntegerVector r_bernoulli_vec(NumericVector pi) {
-  int N = pi.size();
-  IntegerVector gamma(N);
-  NumericVector rands = runif(N);
+IntegerVector r_bernoulli_mat(NumericMatrix pi) {
+  int N = pi.nrow();
+  int S = pi.ncol(); // n objects
+  
+  IntegerVector gamma(N); // store results
+  
+  NumericVector rands = runif(N); // n random numbers
+  
   for(int i = 0; i < N; i++) {
-    if(rands[i] < pi[i]) {
-      gamma[i] = 1;
-    } else {
-      gamma[i] = 0;
+    NumericVector pi_i = pi(i,_);
+
+    double cum_prob = 0;    
+    for(int s = 0; s < S; s++) {
+      cum_prob += pi_i[s];
+      if(rands[i] < cum_prob) {
+        gamma[i] = s;
+        break;
+      } 
     }
   }
   return gamma;
@@ -41,11 +50,12 @@ IntegerVector r_bernoulli_vec(NumericVector pi) {
  * K sampling here
  ******/
 
+//[[Rcpp::export]]
 NumericVector calculate_nuk(NumericMatrix y, NumericVector pst, NumericVector c,
                        NumericVector tau, NumericVector theta, NumericVector tau_k,
                        LogicalVector which_l) {
-  int N = pst.size();
-  int G = c.size();
+  int N = y.nrow();
+  int G = y.ncol();
   
   NumericVector nu_k(G);
 
@@ -61,7 +71,7 @@ NumericVector calculate_nuk(NumericMatrix y, NumericVector pst, NumericVector c,
   return nu_k;
 }
 
-
+//[[Rcpp::export]]
 NumericVector calculate_lamk(NumericVector tau_k, NumericVector tau, 
                              NumericVector pst, LogicalVector which_l) {
   int G = tau.size();
@@ -84,7 +94,8 @@ NumericVector calculate_lamk(NumericVector tau_k, NumericVector tau,
 NumericVector sample_k(NumericMatrix y, NumericVector pst, NumericVector c,
                        NumericVector tau, NumericVector theta, NumericVector tau_k,
                        LogicalVector which_l) {
-  int G = c.size();
+  int G = y.ncol();
+  
   NumericVector nuk = calculate_nuk(y, pst, c, tau, theta, tau_k, which_l);
   NumericVector lamk = calculate_lamk(tau_k, tau, pst, which_l);
   
@@ -260,14 +271,14 @@ NumericVector sample_tau(NumericMatrix y, NumericMatrix c, NumericMatrix k,
 
 
 // [[Rcpp::export]]
-NumericVector calculate_pi(NumericMatrix y, NumericMatrix c, NumericMatrix k,
-                           NumericVector gamma, NumericVector pst, NumericVector tau, 
+NumericMatrix calculate_pi(NumericMatrix y, NumericMatrix c, NumericMatrix k, NumericVector pst, NumericVector tau, 
                            NumericVector eta, double tau_c, bool collapse) {
   int N = y.nrow();
   int G = y.ncol();
   int b = c.ncol(); // number of branches
-  
+
   NumericMatrix pi(N,b); // probability of class membership for cell (row) and branch (column)
+
 
   if(collapse == 0) {
     for(int i = 0; i < N; i++) {
@@ -279,29 +290,33 @@ NumericVector calculate_pi(NumericMatrix y, NumericMatrix c, NumericMatrix k,
         
         for(int branch = 0; branch < b; branch++) {
           double comp_mean = c(g, branch) + k(g, branch) * pst[i];
-          comp_ll(b) += log_d_norm(y_, comp_mean, sd)
+          // std::cout << comp_mean << " ";
+          comp_ll(branch) += log_d_norm(y_, comp_mean, sd);
         }
+        // std::cout << std::endl;
         
       }
-      NumericVector comb(2);
-      comb[0] = comp0; comb[1] = comp1;
-      pi(i) = exp(comp0 - log_sum_exp(comb));
+      for(int branch = 0; branch < b; branch++) {
+        // std::cout << comp_ll[branch] << " ";
+        pi(i, branch) = exp(comp_ll[branch] - log_sum_exp(comp_ll));
+      }
+      // std::cout << std::endl;
     }
   } else {
     for(int i = 0; i < N; i++) {
-      double comp0 = 0, comp1 = 0;
+      NumericVector comp_ll(b, 0.0); // log-likelihood vector for each branch, default to 0.0
+      
       for(int g = 0; g < G; g++) {
         double y_ = y(i,g);
-        double comp0_mean = eta[0] + k0[g] * pst[i];
-        double comp1_mean = eta[1] + k1[g] * pst[i];
-        double sd = sqrt(1 / tau_c + 1 / sqrt(tau[g]));
+        double sd = sqrt(1 / tau_c + 1 / tau[g]);
         
-        comp0 += log_d_norm(y_, comp0_mean, sd);
-        comp1 += log_d_norm(y_, comp1_mean, sd);
+        for(int branch = 0; branch < b; branch++) {
+          double comp_mean = eta[branch] + k(g, branch) * pst[i];
+          comp_ll(branch) += log_d_norm(y_, comp_mean, sd);
+        }
       }
-      NumericVector comb(2);
-      comb[0] = comp0; comb[1] = comp1;
-      pi(i) = exp(comp0 - log_sum_exp(comb));
+      for(int branch = 0; branch < b; branch++)
+        pi(i, branch) = exp(comp_ll[branch] - log_sum_exp(comp_ll));
     }
   }
   return pi;

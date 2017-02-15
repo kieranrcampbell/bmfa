@@ -1,17 +1,15 @@
 library(cowplot)
-library(ggplot2)
 library(rhdf5)
 library(coda)
 library(MCMCglmm)
 library(viridis)
 library(ggmcmc)
-library(dplyr)
-library(readr)
 library(scater)
 library(matrixStats)
-library(tidyr)
 library(magrittr)
+library(Rcpp)
 
+library(tidyverse)
 
 # Synthetic ---------------------------------------------------------------
 
@@ -33,15 +31,15 @@ ggplot(dp, aes(x = PC1, y = PC2, colour = branch)) + geom_point() +
 ggsave("figs/for_presentation/synthetic_branching.png", width = 4.5, height = 3)
 
 
-source("houdini/R/houdini.R")
-sourceCpp("houdini/src/gibbs.cpp")
+# source("mhoudini/R/houdini.R")
+# sourceCpp("mhoudini/src/gibbs.cpp")
 
 set.seed(1L)
-g <- mfa_cpp(t(scale(X)), iter = 1e5, 
-             thin = 1e2, collapse = T, eta_tilde = 0)
+# g <- multi_mfa(scale(X), iter = 5e5, thin = 2e2, b = 3,
+#              collapse = T, eta_tilde = 0)
 
-#source("scripts/gibbs_semi_ard.R")
-#g <- mfa_gibbs_semi_ard(t(X), iter = 200000, thin = 100, collapse = TRUE, eta_tilde = 5)
+library(mfa)
+
 
 mc <- to_ggmcmc(g)
 
@@ -49,6 +47,40 @@ mc <- to_ggmcmc(g)
 ggs_traceplot(filter(mc, Parameter == "lp__")) + stat_smooth()
 
 ggs_autocorrelation(filter(mc, Parameter == "lp__"))
+
+tmap <- posterior.mode(mcmc(g$pst_trace))
+
+# gamma_mean <- colMeans(g$gamma_trace)
+gamma_mean <- map_branch(g)
+
+dp2 <- data.frame(prcomp(X)$x[,1:2], branch = factor(gamma_mean$max), gvar = gamma_mean$prop, pseudotime = tmap)
+# dp2 <- data.frame(prcomp(X)$x[,1:2], branch = gamma_mean, pseudotime = tmap)
+
+plt_map_pseudotime <- ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + 
+  geom_point(size = 2) +
+  scale_color_viridis(name = expression(paste("MAP ", t))) + theme_classic()
+plt_map_pseudotime
+
+ggplot(dp2, aes(x = PC1, y = PC2, colour = branch, size = gvar)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1", name = expression(paste("MAP ", gamma))) + theme_classic()
+
+plt_true_map <- data_frame(true_t, tmap) %>% 
+  ggplot(aes(x = true_t, y = tmap)) +
+  geom_point(shape = 21, fill = "grey", color = "black", size = 2) +
+  ylab("MAP pseudotime") + xlab("True pseudotime") + geom_rug(alpha = 0.5) +
+  theme_classic()
+plt_true_map
+
+print(cor(true_t, tmap, method = "spearman"))
+
+plot_grid(plt_map_pseudotime, plt_map_branch,
+          plt_true_map, plt_tau_branch, labels = "AUTO")
+ggsave("~/Google Drive/campbell/mfa/manuscript/figs/toy.png", width = 8, height = 5)
+ggsave("~/Google Drive/campbell/mfa/nips/figs/nips_fig_1.png", width = 8, height = 5)
+
+ggsave("figs/for_presentation/synthetic_results.png", width = 11, height = 7)
+
 
 
 branching_features <- paste0("tau_k[", 1:20, "]")
@@ -65,41 +97,6 @@ plt_tau_branch <- ggplot(tau_means, aes(x = Parameter, y = map, fill = is_branch
   ylab(expression(paste("[MAP ", chi[g] ,"]" ^ "-1"))) + xlab("Gene") + theme_classic() +
   theme(axis.text.y = element_blank(), axis.ticks.y = element_blank()) 
 # ggsave("figs/ard.png", width = 5, height = 3)
-
-
-tmap <- posterior.mode(mcmc(g$pst_trace))
-gamma_mean <- colMeans(g$gamma_trace)
-
-dp2 <- data.frame(prcomp(X)$x[,1:2], branch = gamma_mean, pseudotime = tmap)
-
-plt_map_pseudotime <- ggplot(dp2, aes(x = PC1, y = PC2, colour = pseudotime)) + 
-  geom_point(size = 2) +
-  scale_color_viridis(name = expression(paste("MAP ", t))) + theme_classic()
-
-plt_map_branch <- ggplot(dp2, aes(x = PC1, y = PC2, colour = branch)) + 
-  geom_point(size = 2) +
-  scale_color_viridis(name = expression(paste("MAP ", gamma))) + theme_classic()
-
-
-plt_true_map <- data_frame(true_t, tmap) %>% 
-  ggplot(aes(x = true_t, y = tmap)) +
-  geom_point(shape = 21, fill = "grey", color = "black", size = 2) +
-  ylab("MAP pseudotime") + xlab("True pseudotime") + geom_rug(alpha = 0.5) +
-  theme_classic()
-
-print(cor(true_t, tmap, method = "spearman"))
-
-plot_grid(plt_map_pseudotime, plt_map_branch,
-          plt_true_map, plt_tau_branch, labels = "AUTO")
-ggsave("~/Google Drive/campbell/mfa/manuscript/figs/toy.png", width = 8, height = 5)
-ggsave("~/Google Drive/campbell/mfa/nips/figs/nips_fig_1.png", width = 8, height = 5)
-
-ggsave("figs/for_presentation/synthetic_results.png", width = 11, height = 7)
-
-filter(mc, Parameter %in% c("k0[29]", "k1[29]", "theta[29]", "eta[1]",
-                            "tau_k[29]", "c0[29]", "c1[29]")) %>% 
-  ggs_traceplot()
-
 
 
 
@@ -341,11 +338,6 @@ sc <- sce[rowMeans(exprs(sce) > 0) > 0.2, ] # expressed in at least 20% of cells
 
 ## find genes correlated with trajectory
 
-gcors <- apply(exprs(sc), 1, function(x) cor(x, sc$Trajectory))
-bcors <- apply(exprs(sc), 1, function(x) {
-  a <- aov(x ~ as.factor(sc$Branch))
-  summary(a)[[1]][["Pr(>F)"]][1]
-})
 
 
 means <- rowMeans(exprs(sc))
